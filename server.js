@@ -2,49 +2,43 @@ import express from "express";
 import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
 
-// uploads フォルダが無ければ作成
-if (!fs.existsSync("uploads")) {
-  fs.mkdirSync("uploads");
-}
-
 const app = express();
 
-// JSON の受け取りを許可（50MBまで）
-app.use(express.json({ limit: "50mb" }));
+// JSON を受け取る（URL だけ渡す）
+app.use(express.json({ limit: "5mb" }));
 
-// テスト用エンドポイント
+// テスト用
 app.get("/test", (req, res) => {
-  res.send("API is working");
+  res.send("FFmpeg URL concat API is working");
 });
 
-// Render / Koyeb の ffmpeg を使用
+// Koyeb / Render の ffmpeg パス
 ffmpeg.setFfmpegPath("/usr/bin/ffmpeg");
 console.log("FFmpeg path set to /usr/bin/ffmpeg");
 
 app.post("/concat", async (req, res) => {
   try {
-    const { factBase64, opinionBase64 } = req.body;
+    const { factUrl, opinionUrl } = req.body;
 
-    if (!factBase64 || !opinionBase64) {
-      return res.status(400).send("Missing audio data");
+    if (!factUrl || !opinionUrl) {
+      return res.status(400).send("Missing factUrl or opinionUrl");
     }
 
-    // 一時ファイルとして保存
-    const factPath = `uploads/fact_${Date.now()}.mp3`;
-    const opinionPath = `uploads/opinion_${Date.now()}.mp3`;
+    // 一時出力ファイル
+    if (!fs.existsSync("uploads")) {
+      fs.mkdirSync("uploads");
+    }
     const output = `uploads/merged_${Date.now()}.mp3`;
 
-    fs.writeFileSync(factPath, Buffer.from(factBase64, "base64"));
-    fs.writeFileSync(opinionPath, Buffer.from(opinionBase64, "base64"));
-
     ffmpeg()
-      .input(factPath)
-      .input(opinionPath)
-      .on("start", (cmd) => {
+      .input(factUrl)      // ← GitHub などの URL
+      .input(opinionUrl)   // ← GitHub などの URL
+      .on("start", cmd => {
         console.log("FFmpeg started:", cmd);
       })
-      .on("error", (err) => {
+      .on("error", err => {
         console.error("FFmpeg error:", err);
+        if (fs.existsSync(output)) fs.unlinkSync(output);
         res.status(500).send("Error processing audio");
       })
       .on("end", () => {
@@ -54,20 +48,16 @@ app.post("/concat", async (req, res) => {
         res.setHeader("Content-Type", "audio/mpeg");
         res.send(file);
 
-        fs.unlinkSync(factPath);
-        fs.unlinkSync(opinionPath);
         fs.unlinkSync(output);
       })
       .mergeToFile(output);
   } catch (err) {
-    console.error(err);
+    console.error("Server error:", err);
     res.status(500).send("Server error");
   }
 });
 
-// Koyeb は PORT=8000 を環境変数で渡す
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
-  console.log(`FFmpeg API running on port ${PORT}`);
+  console.log(`FFmpeg URL concat API running on port ${PORT}`);
 });
