@@ -4,6 +4,11 @@ import ffmpeg from "fluent-ffmpeg";
 import ffmpegPath from "ffmpeg-static";
 import fs from "fs";
 
+// uploads フォルダが無ければ作成
+if (!fs.existsSync("uploads")) {
+  fs.mkdirSync("uploads");
+}
+
 const app = express();
 const upload = multer({ dest: "uploads/" });
 
