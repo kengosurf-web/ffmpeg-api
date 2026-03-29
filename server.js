@@ -11,6 +11,11 @@ if (!fs.existsSync("uploads")) {
 const app = express();
 const upload = multer({ dest: "uploads/" });
 
+// テスト用エンドポイント（import の後に置く）
+app.get("/test", (req, res) => {
+  res.send("API is working");
+});
+
 // Render の ffmpeg を使用
 ffmpeg.setFfmpegPath("/usr/bin/ffmpeg");
 
