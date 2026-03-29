@@ -1,7 +1,6 @@
 import express from "express";
 import multer from "multer";
 import ffmpeg from "fluent-ffmpeg";
-import ffmpegPath from "ffmpeg-static";
 import fs from "fs";
 
 // uploads フォルダが無ければ作成
@@ -12,7 +11,8 @@ if (!fs.existsSync("uploads")) {
 const app = express();
 const upload = multer({ dest: "uploads/" });
 
-ffmpeg.setFfmpegPath(ffmpegPath);
+// Render の ffmpeg を使用
+ffmpeg.setFfmpegPath("/usr/bin/ffmpeg");
 
 app.post("/concat", upload.fields([
   { name: "factAudio", maxCount: 1 },
