@@ -19,8 +19,8 @@ app.get("/test", (req, res) => {
 // Render の ffmpeg を使用
 ffmpeg.setFfmpegPath("/usr/bin/ffmpeg");
 
-// ffmpeg パス確認（ログに出る）
-console.log("FFmpeg path:", ffmpeg._getFfmpegPath());
+// ffmpeg パス確認（安全な方法）
+console.log("FFmpeg path set to /usr/bin/ffmpeg");
 
 app.post("/concat", upload.fields([
   { name: "factAudio", maxCount: 1 },
