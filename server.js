@@ -2,34 +2,42 @@ import express from "express";
 import multer from "multer";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegPath from "ffmpeg-static";
-import { PassThrough } from "stream";
+import fs from "fs";
 
 const app = express();
-const upload = multer();
+const upload = multer({ dest: "uploads/" });
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
-app.post("/concat", upload.fields([{ name: "fact" }, { name: "opinion" }]), (req, res) => {
-  const fact = req.files["fact"][0];
-  const opinion = req.files["opinion"][0];
+app.post("/concat", upload.fields([
+  { name: "factAudio", maxCount: 1 },
+  { name: "opinionAudio", maxCount: 1 }
+]), (req, res) => {
 
-  const outputStream = new PassThrough();
-  res.set("Content-Type", "audio/mpeg");
+  const fact = req.files["factAudio"][0].path;
+  const opinion = req.files["opinionAudio"][0].path;
+
+  const output = `uploads/merged_${Date.now()}.mp3`;
 
   ffmpeg()
-    .input(fact.buffer)
-    .input(opinion.buffer)
-    .on("error", err => {
-      console.error(err);
-      res.status(500).send(err.message);
+    .input(fact)
+    .input(opinion)
+    .on("error", (err) => {
+      console.error("FFmpeg error:", err);
+      res.status(500).send("Error processing audio");
     })
     .on("end", () => {
-      console.log("concat done");
-    })
-    .format("mp3")
-    .pipe(outputStream);
+      const file = fs.readFileSync(output);
+      res.setHeader("Content-Type", "audio/mpeg");
+      res.send(file);
 
-  outputStream.pipe(res);
+      fs.unlinkSync(fact);
+      fs.unlinkSync(opinion);
+      fs.unlinkSync(output);
+    })
+    .mergeToFile(output);
 });
 
-app.listen(3000, () => console.log("FFmpeg API running on port 3000"));
+app.listen(3000, () => {
+  console.log("FFmpeg API running on port 3000");
+});
