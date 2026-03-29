@@ -11,13 +11,16 @@ if (!fs.existsSync("uploads")) {
 const app = express();
 const upload = multer({ dest: "uploads/" });
 
-// テスト用エンドポイント（import の後に置く）
+// テスト用エンドポイント
 app.get("/test", (req, res) => {
   res.send("API is working");
 });
 
 // Render の ffmpeg を使用
 ffmpeg.setFfmpegPath("/usr/bin/ffmpeg");
+
+// ffmpeg パス確認（ログに出る）
+console.log("FFmpeg path:", ffmpeg._getFfmpegPath());
 
 app.post("/concat", upload.fields([
   { name: "factAudio", maxCount: 1 },
@@ -32,11 +35,16 @@ app.post("/concat", upload.fields([
   ffmpeg()
     .input(fact)
     .input(opinion)
+    .on("start", cmd => {
+      console.log("FFmpeg started:", cmd);
+    })
     .on("error", (err) => {
       console.error("FFmpeg error:", err);
       res.status(500).send("Error processing audio");
     })
     .on("end", () => {
+      console.log("FFmpeg finished:", output);
+
       const file = fs.readFileSync(output);
       res.setHeader("Content-Type", "audio/mpeg");
       res.send(file);
