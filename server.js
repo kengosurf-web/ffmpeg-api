@@ -1,76 +1,56 @@
 import express from "express";
+import axios from "axios";
 import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
-import axios from "axios";
-import path from "path";
+import { v4 as uuidv4 } from "uuid";
 
 const app = express();
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json());
 
-ffmpeg.setFfmpegPath("/usr/bin/ffmpeg");
-
-// URL からファイルをダウンロードして保存する関数
-async function downloadFile(url, outputPath) {
-  const response = await axios({
-    url,
-    method: "GET",
-    responseType: "arraybuffer",
-    headers: {
-      "User-Agent": "Mozilla/5.0" // GitHub raw 対策
-    }
-  });
-
-  fs.writeFileSync(outputPath, response.data);
-  return outputPath;
-}
-
-app.post("/concat", async (req, res) => {
+app.post("/merge", async (req, res) => {
   try {
     const { factUrl, opinionUrl } = req.body;
 
     if (!factUrl || !opinionUrl) {
-      return res.status(400).send("Missing factUrl or opinionUrl");
+      return res.status(400).json({ error: "Missing URLs" });
     }
 
-    // 一時フォルダ
-    if (!fs.existsSync("tmp")) fs.mkdirSync("tmp");
+    // 一時ファイル名
+    const factPath = `/tmp/fact-${uuidv4()}.mp3`;
+    const opinionPath = `/tmp/opinion-${uuidv4()}.mp3`;
+    const outputPath = `/tmp/output-${uuidv4()}.mp3`;
 
-    const factPath = path.join("tmp", `fact_${Date.now()}.mp3`);
-    const opinionPath = path.join("tmp", `opinion_${Date.now()}.mp3`);
-    const outputPath = path.join("tmp", `merged_${Date.now()}.mp3`);
+    // ダウンロード
+    const download = async (url, path) => {
+      const response = await axios({ url, responseType: "arraybuffer" });
+      fs.writeFileSync(path, response.data);
+    };
 
-    // ① URL から音声をダウンロード
-    await downloadFile(factUrl, factPath);
-    await downloadFile(opinionUrl, opinionPath);
+    await download(factUrl, factPath);
+    await download(opinionUrl, opinionPath);
 
-    // ② ffmpeg で連結
+    // ffmpeg 結合
     ffmpeg()
       .input(factPath)
       .input(opinionPath)
-      .on("start", cmd => console.log("FFmpeg:", cmd))
-      .on("error", err => {
-        console.error("FFmpeg error:", err);
-        res.status(500).send("Error processing audio");
-      })
       .on("end", () => {
-        console.log("FFmpeg finished:", outputPath);
-
         const file = fs.readFileSync(outputPath);
         res.setHeader("Content-Type", "audio/mpeg");
         res.send(file);
 
-        // 一時ファイル削除
         fs.unlinkSync(factPath);
         fs.unlinkSync(opinionPath);
         fs.unlinkSync(outputPath);
       })
+      .on("error", (err) => {
+        console.error(err);
+        res.status(500).json({ error: "ffmpeg error" });
+      })
       .mergeToFile(outputPath);
-
   } catch (err) {
-    console.error("Server error:", err);
-    res.status(500).send("Server error");
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`API running on port ${PORT}`));
+app.listen(3000, () => console.log("API running on port 3000"));
