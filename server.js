@@ -15,12 +15,10 @@ app.post("/merge", async (req, res) => {
       return res.status(400).json({ error: "Missing URLs" });
     }
 
-    // 一時ファイル名
     const factPath = `/tmp/fact-${uuidv4()}.mp3`;
     const opinionPath = `/tmp/opinion-${uuidv4()}.mp3`;
     const outputPath = `/tmp/output-${uuidv4()}.mp3`;
 
-    // ダウンロード
     const download = async (url, path) => {
       const response = await axios({ url, responseType: "arraybuffer" });
       fs.writeFileSync(path, response.data);
@@ -29,7 +27,6 @@ app.post("/merge", async (req, res) => {
     await download(factUrl, factPath);
     await download(opinionUrl, opinionPath);
 
-    // ffmpeg 結合
     ffmpeg()
       .input(factPath)
       .input(opinionPath)
@@ -53,4 +50,6 @@ app.post("/merge", async (req, res) => {
   }
 });
 
-app.listen(3000, () => console.log("API running on port 3000"));
+// ⭐ Koyeb Free で必須
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`API running on port ${PORT}`));
