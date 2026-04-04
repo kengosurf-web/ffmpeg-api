@@ -141,16 +141,10 @@ app.post("/render", async (req, res) => {
     const bottomPath = `/tmp/bottom-${uuidv4()}.png`;
     fs.writeFileSync(bottomPath, bottomBuffer);
 
-    // 字幕 PNG
+    // 字幕 PNG（壊れていても弾かない）
     const pngPaths = [];
     for (const sub of subtitles) {
       const buf = await fetchBinaryWithRetry(sub.url);
-
-      // ★ 壊れた PNG を検出（0byte ではないが小さすぎる場合）
-      if (buf.length < 500) {
-        throw new Error("Corrupted PNG detected: " + sub.url);
-      }
-
       const p = `/tmp/sub-${uuidv4()}.png`;
       fs.writeFileSync(p, buf);
       pngPaths.push({ path: p, start: sub.start, length: sub.length });
@@ -218,7 +212,7 @@ app.post("/render", async (req, res) => {
     command
       .complexFilter(filter, lastLabel)
       .outputOptions([
-        "-map", lastLabel,
+        "-map", `[${lastLabel}]`,   // ← ★ これが今回の本命修正
         "-map", "1:a",
         "-c:v", "libx264",
         "-c:a", "aac",
