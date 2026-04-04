@@ -141,7 +141,7 @@ app.post("/render", async (req, res) => {
     const bottomPath = `/tmp/bottom-${uuidv4()}.png`;
     fs.writeFileSync(bottomPath, bottomBuffer);
 
-    // 字幕 PNG（壊れていても弾かない）
+    // 字幕 PNG（サイズで弾かない・全部通す）
     const pngPaths = [];
     for (const sub of subtitles) {
       const buf = await fetchBinaryWithRetry(sub.url);
@@ -153,7 +153,7 @@ app.post("/render", async (req, res) => {
     const outputPath = `/tmp/video-${uuidv4()}.mp4`;
 
     // --------------------------------------------------
-    // ★★★ 字幕を最後に overlay する安定版 filter_complex ★★★
+    // 字幕を最後に overlay する安定版 filter_complex
     // --------------------------------------------------
     const filter = [];
 
@@ -210,9 +210,10 @@ app.post("/render", async (req, res) => {
     pngPaths.forEach((p) => command.input(p.path)); // 4〜
 
     command
-      .complexFilter(filter, lastLabel)
+      // 出力ラベルは filter 側で定義しているので第二引数は渡さない
+      .complexFilter(filter)
       .outputOptions([
-        "-map", `[${lastLabel}]`,   // ← ★ これが今回の本命修正
+        "-map", `[${lastLabel}]`,   // フィルターラベルを明示的に指定
         "-map", "1:a",
         "-c:v", "libx264",
         "-c:a", "aac",
