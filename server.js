@@ -22,7 +22,6 @@ async function fetchBinaryWithRetry(url, maxRetries = 5) {
 
       const contentType = res.headers.get("content-type") || "";
 
-      // HTML → リトライ
       if (contentType.includes("text/html")) {
         console.log(`HTML detected on attempt ${attempt + 1}, retrying...`);
         await wait(300 + attempt * 200);
@@ -32,7 +31,6 @@ async function fetchBinaryWithRetry(url, maxRetries = 5) {
 
       const buffer = Buffer.from(await res.arrayBuffer());
 
-      // 0バイト → リトライ
       if (buffer.length === 0) {
         console.log(`0-byte buffer on attempt ${attempt + 1}, retrying...`);
         await wait(300 + attempt * 200);
@@ -110,7 +108,13 @@ app.post("/merge", async (req, res) => {
 // --------------------------------------------------
 app.post("/render", async (req, res) => {
   try {
-    const { background, audio, subtitles } = req.body;
+    // ★★★ ここが唯一の変更点 ★★★
+    let body = req.body;
+    if (Array.isArray(body)) {
+      body = body[0];
+    }
+    const { background, audio, subtitles } = body;
+    // ★★★★★★★★★★★★★★★★★★★★
 
     if (!background || !audio || !Array.isArray(subtitles)) {
       return res.status(400).json({
@@ -120,17 +124,14 @@ app.post("/render", async (req, res) => {
 
     console.log("Downloading assets...");
 
-    // 背景動画
     const bgBuffer = await fetchBinaryWithRetry(background);
     const bgPath = `/tmp/bg-${uuidv4()}.mp4`;
     fs.writeFileSync(bgPath, bgBuffer);
 
-    // 音声
     const audioBuffer = await fetchBinaryWithRetry(audio);
     const audioPath = `/tmp/audio-${uuidv4()}.mp3`;
     fs.writeFileSync(audioPath, audioBuffer);
 
-    // 字幕PNG
     const pngPaths = [];
     for (const sub of subtitles) {
       const buf = await fetchBinaryWithRetry(sub.url);
@@ -139,19 +140,13 @@ app.post("/render", async (req, res) => {
       pngPaths.push({ path: p, start: sub.start, length: sub.length });
     }
 
-    // 出力
     const outputPath = `/tmp/video-${uuidv4()}.mp4`;
 
-    // --------------------------------------------------
-    // filter_complex の生成
-    // --------------------------------------------------
     let filter = "";
     let lastLabel = "[0:v]";
 
     pngPaths.forEach((sub, i) => {
       const label = `[v${i + 1}]`;
-
-      // Shotstack の bottom + offset y:0.15 → 下から288px
       const x = "(W-w)/2";
       const y = "H-h-288";
 
@@ -159,14 +154,11 @@ app.post("/render", async (req, res) => {
       lastLabel = label;
     });
 
-    // --------------------------------------------------
-    // ffmpeg 実行
-    // --------------------------------------------------
     const command = ffmpeg()
-      .input(bgPath) // 0:v
-      .input(audioPath); // 1:a
+      .input(bgPath)
+      .input(audioPath);
 
-    pngPaths.forEach((p) => command.input(p.path)); // 2:v, 3:v, ...
+    pngPaths.forEach((p) => command.input(p.path));
 
     command
       .complexFilter(filter, lastLabel.replace("]", "").replace("[", ""))
@@ -210,3 +202,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
 });
+
