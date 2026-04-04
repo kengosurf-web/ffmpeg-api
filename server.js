@@ -145,6 +145,12 @@ app.post("/render", async (req, res) => {
     const pngPaths = [];
     for (const sub of subtitles) {
       const buf = await fetchBinaryWithRetry(sub.url);
+
+      // ★ 壊れた PNG を検出（0byte ではないが小さすぎる場合）
+      if (buf.length < 500) {
+        throw new Error("Corrupted PNG detected: " + sub.url);
+      }
+
       const p = `/tmp/sub-${uuidv4()}.png`;
       fs.writeFileSync(p, buf);
       pngPaths.push({ path: p, start: sub.start, length: sub.length });
@@ -181,13 +187,13 @@ app.post("/render", async (req, res) => {
     });
 
     // 字幕（4番以降）→ 最後に overlay
-    let last = "v_tb";
+    let lastLabel = "v_tb";
 
     pngPaths.forEach((sub, i) => {
       const label = `v_sub_${i}`;
       filter.push({
         filter: "overlay",
-        inputs: [last, `${i + 4}:v`],
+        inputs: [lastLabel, `${i + 4}:v`],
         options: {
           x: "(W-w)/2",
           y: "H-h-288",
@@ -195,8 +201,10 @@ app.post("/render", async (req, res) => {
         },
         outputs: label
       });
-      last = label;
+      lastLabel = label;
     });
+
+    console.log("FINAL LABEL:", lastLabel);
 
     const command = ffmpeg()
       .input(bgPath)      // 0
@@ -208,9 +216,9 @@ app.post("/render", async (req, res) => {
     pngPaths.forEach((p) => command.input(p.path)); // 4〜
 
     command
-      .complexFilter(filter, last)
+      .complexFilter(filter, lastLabel)
       .outputOptions([
-        "-map", last,
+        "-map", lastLabel,
         "-map", "1:a",
         "-c:v", "libx264",
         "-c:a", "aac",
