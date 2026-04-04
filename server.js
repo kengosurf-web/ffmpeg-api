@@ -153,7 +153,7 @@ app.post("/render", async (req, res) => {
     const outputPath = `/tmp/video-${uuidv4()}.mp4`;
 
     // --------------------------------------------------
-    // ★★★ 並列 overlay 方式（壊れない方式） ★★★
+    // ★★★ 字幕を最後に overlay する安定版 filter_complex ★★★
     // --------------------------------------------------
     const filter = [];
 
@@ -164,7 +164,7 @@ app.post("/render", async (req, res) => {
       outputs: "base"
     });
 
-    // トップ画像（常に 2 番）
+    // トップ画像（2番）
     filter.push({
       filter: "overlay",
       inputs: ["base", "2:v"],
@@ -172,7 +172,7 @@ app.post("/render", async (req, res) => {
       outputs: "v_top"
     });
 
-    // ボトム画像（常に 3 番）
+    // ボトム画像（3番）
     filter.push({
       filter: "overlay",
       inputs: ["v_top", "3:v"],
@@ -180,7 +180,7 @@ app.post("/render", async (req, res) => {
       outputs: "v_tb"
     });
 
-    // 字幕（4 番以降）
+    // 字幕（4番以降）→ 最後に overlay
     let last = "v_tb";
 
     pngPaths.forEach((sub, i) => {
