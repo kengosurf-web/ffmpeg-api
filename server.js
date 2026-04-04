@@ -8,7 +8,7 @@ const app = express();
 app.use(express.json());
 
 // --------------------------------------------------
-// 共通：GitHub Raw 対策（HTML/0byte/非バイナリをリトライ）
+// GitHub Raw 対策（HTML/0byte/非バイナリをリトライ）
 // --------------------------------------------------
 async function fetchBinaryWithRetry(url, maxRetries = 5) {
   let attempt = 0;
@@ -108,13 +108,10 @@ app.post("/merge", async (req, res) => {
 // --------------------------------------------------
 app.post("/render", async (req, res) => {
   try {
-    // ★★★ ここが唯一の変更点 ★★★
     let body = req.body;
-    if (Array.isArray(body)) {
-      body = body[0];
-    }
+    if (Array.isArray(body)) body = body[0];
+
     const { background, audio, subtitles } = body;
-    // ★★★★★★★★★★★★★★★★★★★★
 
     if (!background || !audio || !Array.isArray(subtitles)) {
       return res.status(400).json({
@@ -142,15 +139,35 @@ app.post("/render", async (req, res) => {
 
     const outputPath = `/tmp/video-${uuidv4()}.mp4`;
 
-    let filter = "";
-    let lastLabel = "[0:v]";
+    // --------------------------------------------------
+    // ★★★ 並列 overlay 方式（壊れない方式） ★★★
+    // --------------------------------------------------
+    const filter = [];
+    let lastLabel = "base";
+
+    // 背景動画を base として定義
+    filter.push({
+      filter: "null",
+      inputs: "0:v",
+      outputs: lastLabel
+    });
 
     pngPaths.forEach((sub, i) => {
-      const label = `[v${i + 1}]`;
+      const label = `v${i + 1}`;
       const x = "(W-w)/2";
       const y = "H-h-288";
 
-      filter += `${lastLabel}[${i + 1}:v] overlay=${x}:${y}:enable='between(t,${sub.start},${sub.start + sub.length})' ${label};`;
+      filter.push({
+        filter: "overlay",
+        options: {
+          x,
+          y,
+          enable: `between(t,${sub.start},${sub.start + sub.length})`
+        },
+        inputs: [lastLabel, `${i + 2}:v`],
+        outputs: label
+      });
+
       lastLabel = label;
     });
 
@@ -161,9 +178,9 @@ app.post("/render", async (req, res) => {
     pngPaths.forEach((p) => command.input(p.path));
 
     command
-      .complexFilter(filter, lastLabel.replace("]", "").replace("[", ""))
+      .complexFilter(filter, lastLabel)
       .outputOptions([
-        "-map", `${lastLabel.replace("[", "").replace("]", "")}`,
+        "-map", lastLabel,
         "-map", "1:a",
         "-c:v", "libx264",
         "-c:a", "aac",
