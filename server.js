@@ -111,24 +111,37 @@ app.post("/render", async (req, res) => {
     let body = req.body;
     if (Array.isArray(body)) body = body[0];
 
-    const { background, audio, subtitles } = body;
+    const { background, audio, top, bottom, subtitles } = body;
 
-    if (!background || !audio || !Array.isArray(subtitles)) {
+    if (!background || !audio || !top || !bottom || !Array.isArray(subtitles)) {
       return res.status(400).json({
-        error: "Missing background, audio, or subtitles"
+        error: "Missing background, audio, top, bottom, or subtitles"
       });
     }
 
     console.log("Downloading assets...");
 
+    // 背景
     const bgBuffer = await fetchBinaryWithRetry(background);
     const bgPath = `/tmp/bg-${uuidv4()}.mp4`;
     fs.writeFileSync(bgPath, bgBuffer);
 
+    // 音声
     const audioBuffer = await fetchBinaryWithRetry(audio);
     const audioPath = `/tmp/audio-${uuidv4()}.mp3`;
     fs.writeFileSync(audioPath, audioBuffer);
 
+    // トップ画像
+    const topBuffer = await fetchBinaryWithRetry(top);
+    const topPath = `/tmp/top-${uuidv4()}.png`;
+    fs.writeFileSync(topPath, topBuffer);
+
+    // ボトム画像
+    const bottomBuffer = await fetchBinaryWithRetry(bottom);
+    const bottomPath = `/tmp/bottom-${uuidv4()}.png`;
+    fs.writeFileSync(bottomPath, bottomBuffer);
+
+    // 字幕 PNG
     const pngPaths = [];
     for (const sub of subtitles) {
       const buf = await fetchBinaryWithRetry(sub.url);
@@ -143,44 +156,61 @@ app.post("/render", async (req, res) => {
     // ★★★ 並列 overlay 方式（壊れない方式） ★★★
     // --------------------------------------------------
     const filter = [];
-    let lastLabel = "base";
 
-    // 背景動画を base として定義
+    // 背景を base として定義
     filter.push({
       filter: "null",
       inputs: "0:v",
-      outputs: lastLabel
+      outputs: "base"
     });
 
-    pngPaths.forEach((sub, i) => {
-      const label = `v${i + 1}`;
-      const x = "(W-w)/2";
-      const y = "H-h-288";
+    // トップ画像（常に 2 番）
+    filter.push({
+      filter: "overlay",
+      inputs: ["base", "2:v"],
+      options: { x: "(W-w)/2", y: "0" },
+      outputs: "v_top"
+    });
 
+    // ボトム画像（常に 3 番）
+    filter.push({
+      filter: "overlay",
+      inputs: ["v_top", "3:v"],
+      options: { x: "(W-w)/2", y: "H-h" },
+      outputs: "v_tb"
+    });
+
+    // 字幕（4 番以降）
+    let last = "v_tb";
+
+    pngPaths.forEach((sub, i) => {
+      const label = `v_sub_${i}`;
       filter.push({
         filter: "overlay",
+        inputs: [last, `${i + 4}:v`],
         options: {
-          x,
-          y,
+          x: "(W-w)/2",
+          y: "H-h-288",
           enable: `between(t,${sub.start},${sub.start + sub.length})`
         },
-        inputs: [lastLabel, `${i + 2}:v`],
         outputs: label
       });
-
-      lastLabel = label;
+      last = label;
     });
 
     const command = ffmpeg()
-      .input(bgPath)
-      .input(audioPath);
+      .input(bgPath)      // 0
+      .input(audioPath)   // 1
+      .input(topPath)     // 2
+      .input(bottomPath)  // 3
+    ;
 
-    pngPaths.forEach((p) => command.input(p.path));
+    pngPaths.forEach((p) => command.input(p.path)); // 4〜
 
     command
-      .complexFilter(filter, lastLabel)
+      .complexFilter(filter, last)
       .outputOptions([
-        "-map", lastLabel,
+        "-map", last,
         "-map", "1:a",
         "-c:v", "libx264",
         "-c:a", "aac",
@@ -196,6 +226,8 @@ app.post("/render", async (req, res) => {
         } finally {
           fs.unlinkSync(bgPath);
           fs.unlinkSync(audioPath);
+          fs.unlinkSync(topPath);
+          fs.unlinkSync(bottomPath);
           fs.unlinkSync(outputPath);
           pngPaths.forEach((p) => fs.unlinkSync(p.path));
         }
@@ -219,4 +251,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
 });
-
