@@ -145,14 +145,32 @@ app.post("/clip", async (req, res) => {
     const subBuffer = await fetchBinaryWithRetry(subtitlePng);
     fs.writeFileSync(subtitlePath, subBuffer);
 
-    // ffmpeg 合成（1文クリップ）
+    // 音声の長さを取得（背景を同じ長さにするため）
+    const audioDuration = await new Promise((resolve, reject) => {
+      ffmpeg.ffprobe(audioPath, (err, metadata) => {
+        if (err) reject(err);
+        else resolve(metadata.format.duration);
+      });
+    });
+
+    // ffmpeg 合成（背景を音声と同じ長さに強制 + 字幕を50%縮小）
     ffmpeg()
       .input(bgPath)
+      .inputOptions([`-t ${audioDuration}`])   // ★背景を音声と同じ長さに強制
       .input(audioPath)
       .input(subtitlePath)
       .complexFilter([
+        // ★字幕PNGを50%縮小
+        {
+          filter: "scale",
+          options: { w: "iw*0.5", h: "ih*0.5" },
+          inputs: "2:v",
+          outputs: "sub_scaled"
+        },
+        // ★字幕を画面下に配置（Y位置はそのまま）
         {
           filter: "overlay",
+          inputs: ["0:v", "sub_scaled"],
           options: {
             x: "(W-w)/2",
             y: "H-h-80"
