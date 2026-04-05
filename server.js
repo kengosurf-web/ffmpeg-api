@@ -104,7 +104,94 @@ app.post("/merge", async (req, res) => {
 });
 
 // --------------------------------------------------
-// /render（動画レンダーAPI）
+// /clip（★新構造：1文クリップ生成API）
+// --------------------------------------------------
+app.post("/clip", async (req, res) => {
+  try {
+    const { subtitlePng, audioUrl, backgroundVideo } = req.body;
+
+    if (!subtitlePng || !audioUrl || !backgroundVideo) {
+      return res.status(400).json({
+        error: "Missing subtitlePng, audioUrl, or backgroundVideo"
+      });
+    }
+
+    console.log("Generating 1-sentence clip...");
+
+    const id = uuidv4();
+
+    // 一時ファイル
+    const bgPath = `/tmp/bg-${id}.mp4`;
+    const audioPath = `/tmp/audio-${id}.mp3`;
+    const subtitlePath = `/tmp/sub-${id}.png`;
+    const outputPath = `/tmp/clip-${id}.mp4`;
+
+    // GitHub API → raw URL に変換
+    let audioDownloadUrl = audioUrl;
+    if (audioUrl.includes("api.github.com")) {
+      audioDownloadUrl = audioUrl
+        .replace("api.github.com/repos", "raw.githubusercontent.com")
+        .replace("/contents/", "/")
+        .replace("?ref=main", "");
+    }
+
+    // ダウンロード
+    const bgBuffer = await fetchBinaryWithRetry(backgroundVideo);
+    fs.writeFileSync(bgPath, bgBuffer);
+
+    const audioBuffer = await fetchBinaryWithRetry(audioDownloadUrl);
+    fs.writeFileSync(audioPath, audioBuffer);
+
+    const subBuffer = await fetchBinaryWithRetry(subtitlePng);
+    fs.writeFileSync(subtitlePath, subBuffer);
+
+    // ffmpeg 合成（1文クリップ）
+    ffmpeg()
+      .input(bgPath)
+      .input(audioPath)
+      .input(subtitlePath)
+      .complexFilter([
+        {
+          filter: "overlay",
+          options: {
+            x: "(W-w)/2",
+            y: "H-h-80"
+          }
+        }
+      ])
+      .outputOptions([
+        "-c:v libx264",
+        "-c:a aac",
+        "-pix_fmt yuv420p",
+        "-shortest"
+      ])
+      .save(outputPath)
+      .on("end", () => {
+        try {
+          const file = fs.readFileSync(outputPath);
+          res.setHeader("Content-Type", "video/mp4");
+          res.send(file);
+        } finally {
+          fs.unlinkSync(bgPath);
+          fs.unlinkSync(audioPath);
+          fs.unlinkSync(subtitlePath);
+          fs.unlinkSync(outputPath);
+        }
+      })
+      .on("error", (err) => {
+        console.error("FFMPEG ERROR (/clip):", err);
+        res.status(500).json({ error: "ffmpeg error", detail: err.message });
+      });
+
+  } catch (err) {
+    console.error("SERVER ERROR (/clip):", err);
+    res.status(500).json({ error: err.message || "Server error" });
+  }
+});
+
+// --------------------------------------------------
+// /render（★旧構造：タイムライン方式）
+// → 後で削除予定のため “旧JS” と明記
 // --------------------------------------------------
 app.post("/render", async (req, res) => {
   try {
@@ -119,7 +206,7 @@ app.post("/render", async (req, res) => {
       });
     }
 
-    console.log("Downloading assets...");
+    console.log("Downloading assets... (OLD RENDER)");
 
     // 背景
     const bgBuffer = await fetchBinaryWithRetry(background);
@@ -141,7 +228,7 @@ app.post("/render", async (req, res) => {
     const bottomPath = `/tmp/bottom-${uuidv4()}.png`;
     fs.writeFileSync(bottomPath, bottomBuffer);
 
-    // 字幕 PNG（サイズで弾かない・全部通す）
+    // 字幕 PNG
     const pngPaths = [];
     for (const sub of subtitles) {
       const buf = await fetchBinaryWithRetry(sub.url);
@@ -153,18 +240,16 @@ app.post("/render", async (req, res) => {
     const outputPath = `/tmp/video-${uuidv4()}.mp4`;
 
     // --------------------------------------------------
-    // 字幕を最後に overlay する安定版 filter_complex
+    // 字幕 overlay（旧構造）
     // --------------------------------------------------
     const filter = [];
 
-    // 背景を base として定義
     filter.push({
       filter: "null",
       inputs: "0:v",
       outputs: "base"
     });
 
-    // トップ画像（2番）
     filter.push({
       filter: "overlay",
       inputs: ["base", "2:v"],
@@ -172,7 +257,6 @@ app.post("/render", async (req, res) => {
       outputs: "v_top"
     });
 
-    // ボトム画像（3番）
     filter.push({
       filter: "overlay",
       inputs: ["v_top", "3:v"],
@@ -180,7 +264,6 @@ app.post("/render", async (req, res) => {
       outputs: "v_tb"
     });
 
-    // 字幕（4番以降）→ 最後に overlay
     let lastLabel = "v_tb";
 
     pngPaths.forEach((sub, i) => {
@@ -198,22 +281,18 @@ app.post("/render", async (req, res) => {
       lastLabel = label;
     });
 
-    console.log("FINAL LABEL:", lastLabel);
-
     const command = ffmpeg()
-      .input(bgPath)      // 0
-      .input(audioPath)   // 1
-      .input(topPath)     // 2
-      .input(bottomPath)  // 3
-    ;
+      .input(bgPath)
+      .input(audioPath)
+      .input(topPath)
+      .input(bottomPath);
 
-    pngPaths.forEach((p) => command.input(p.path)); // 4〜
+    pngPaths.forEach((p) => command.input(p.path));
 
     command
-      // 出力ラベルは filter 側で定義しているので第二引数は渡さない
       .complexFilter(filter)
       .outputOptions([
-        "-map", `[${lastLabel}]`,   // フィルターラベルを明示的に指定
+        "-map", `[${lastLabel}]`,
         "-map", "1:a",
         "-c:v", "libx264",
         "-c:a", "aac",
@@ -236,13 +315,13 @@ app.post("/render", async (req, res) => {
         }
       })
       .on("error", (err) => {
-        console.error("FFMPEG ERROR:", err);
+        console.error("FFMPEG ERROR (OLD RENDER):", err);
         res.status(500).json({ error: "ffmpeg error", detail: err.message });
       })
       .save(outputPath);
 
   } catch (err) {
-    console.error("SERVER ERROR:", err);
+    console.error("SERVER ERROR (OLD RENDER):", err);
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
