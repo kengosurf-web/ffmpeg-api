@@ -103,6 +103,7 @@ app.post("/merge", async (req, res) => {
   }
 });
 
+
 // --------------------------------------------------
 // /clip（★新構造：1文クリップ生成API）
 // --------------------------------------------------
@@ -155,22 +156,21 @@ app.post("/clip", async (req, res) => {
 
     // ffmpeg 合成（背景を音声と同じ長さに強制 + 字幕を50%縮小）
     ffmpeg()
-      .input(bgPath)
-      .inputOptions([`-t ${audioDuration}`])   // ★背景を音声と同じ長さに強制
-      .input(audioPath)
-      .input(subtitlePath)
+      .input(bgPath)          // 0:v
+      .input(audioPath)       // 1:a
+      .input(subtitlePath)    // 2:v
       .complexFilter([
-        // ★字幕PNGを50%縮小
+        // 字幕PNGを縮小
         {
           filter: "scale",
           options: { w: "iw*0.5", h: "ih*0.5" },
-          inputs: "2:v",
+          inputs: "[2:v]",
           outputs: "sub_scaled"
         },
-        // ★字幕を画面下に配置（Y位置はそのまま）
+        // 背景に字幕を重ねる
         {
           filter: "overlay",
-          inputs: ["0:v", "sub_scaled"],
+          inputs: ["[0:v]", "sub_scaled"],
           options: {
             x: "(W-w)/2",
             y: "H-h-80"
@@ -178,9 +178,12 @@ app.post("/clip", async (req, res) => {
         }
       ])
       .outputOptions([
+        "-map 0:v",   // 背景映像
+        "-map 1:a",   // 音声（確実に拾う）
         "-c:v libx264",
         "-c:a aac",
         "-pix_fmt yuv420p",
+        `-t ${audioDuration}`, // 映像を音声と同じ長さに
         "-shortest"
       ])
       .save(outputPath)
@@ -207,7 +210,8 @@ app.post("/clip", async (req, res) => {
   }
 });
 
-// --------------------------------------------------
+
+-----------------
 // /render（★旧構造：タイムライン方式）
 // → 後で削除予定のため “旧JS” と明記
 // --------------------------------------------------
