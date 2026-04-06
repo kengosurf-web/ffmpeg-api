@@ -2,6 +2,8 @@ FROM jrottenberg/ffmpeg:4.4-alpine AS ffmpeg
 
 FROM node:18-alpine
 
+# cache-bust-1 ← この1行だけ追加！
+
 WORKDIR /app
 
 # ffmpeg をコピー
