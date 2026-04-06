@@ -155,15 +155,15 @@ app.post("/clip", async (req, res) => {
 
 // --------------------------------------------------
 // /final-render（フェード入り最終連結API）
+// JSON + Binary（n8n互換）
 // --------------------------------------------------
 app.post("/final-render", async (req, res) => {
   try {
-    const { concatList } = req.body;
-    const files = req.files;
+    const { concatList, clips } = req.body;
 
-    if (!concatList || !files) {
+    if (!concatList || !clips) {
       return res.status(400).json({
-        error: "Missing concatList or binary clips"
+        error: "Missing concatList or clips"
       });
     }
 
@@ -174,15 +174,20 @@ app.post("/final-render", async (req, res) => {
     const concatOutput = `/tmp/concat-${id}.mp4`;
     const finalOutput = `/tmp/final-${id}.mp4`;
 
-    const clipKeys = Object.keys(files);
+    // clips = { clip_0: { data: <Buffer> }, clip_1: {...} }
+    const clipKeys = Object.keys(clips);
 
+    // Binary を /tmp に書き出す
     for (const key of clipKeys) {
       const filePath = `/tmp/${key}.mp4`;
-      fs.writeFileSync(filePath, files[key].data);
+      const buffer = Buffer.from(clips[key].data);
+      fs.writeFileSync(filePath, buffer);
     }
 
+    // concatList を list.txt に書き出す
     fs.writeFileSync(listPath, concatList);
 
+    // まずは concat
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(listPath)
@@ -193,6 +198,7 @@ app.post("/final-render", async (req, res) => {
         .on("error", reject);
     });
 
+    // duration を取得
     const duration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(concatOutput, (err, metadata) => {
         if (err) reject(err);
@@ -203,6 +209,7 @@ app.post("/final-render", async (req, res) => {
     const fadeInSec = 0.8;
     const fadeOutSec = 0.8;
 
+    // フェード入り・フェードアウト
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(concatOutput)
@@ -224,10 +231,12 @@ app.post("/final-render", async (req, res) => {
         .on("error", reject);
     });
 
+    // 完成した動画を返す
     const finalBuffer = fs.readFileSync(finalOutput);
     res.setHeader("Content-Type", "video/mp4");
     res.send(finalBuffer);
 
+    // 後片付け
     fs.unlinkSync(listPath);
     fs.unlinkSync(concatOutput);
     fs.unlinkSync(finalOutput);
