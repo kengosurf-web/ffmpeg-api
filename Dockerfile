@@ -13,8 +13,8 @@ RUN npm install
 # 残りのファイルをコピー
 COPY . .
 
-# ポート（Koyeb は 8000 にフォワードする）
-EXPOSE 3000
+# ★ Koyeb は 8000 を使うので必ず 8000 を公開
+EXPOSE 8000
 
 # サーバー起動
 CMD ["node", "server.js"]
