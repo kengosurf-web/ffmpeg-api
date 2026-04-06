@@ -97,3 +97,152 @@ app.post("/clip", async (req, res) => {
       ffmpeg.ffprobe(audioPath, (err, metadata) => {
         if (err) reject(err);
         else resolve(metadata.format.duration);
+      });
+    });
+
+    ffmpeg()
+      .input(bgPath)
+      .input(audioPath)
+      .input(subtitlePath)
+      .complexFilter([
+        {
+          filter: "scale",
+          options: { w: "iw*0.5", h: "ih*0.5" },
+          inputs: "[2:v]",
+          outputs: "sub_scaled"
+        },
+        {
+          filter: "overlay",
+          inputs: ["[0:v]", "sub_scaled"],
+          options: {
+            x: "(W-w)/2",
+            y: "H-h-80"
+          }
+        }
+      ])
+      .outputOptions([
+        "-map 0:v",
+        "-map 1:a",
+        "-c:v libx264",
+        "-c:a aac",
+        "-pix_fmt yuv420p",
+        `-t ${audioDuration}`,
+        "-shortest"
+      ])
+      .save(outputPath)
+      .on("end", () => {
+        try {
+          const file = fs.readFileSync(outputPath);
+          res.setHeader("Content-Type", "video/mp4");
+          res.send(file);
+        } finally {
+          fs.unlinkSync(bgPath);
+          fs.unlinkSync(audioPath);
+          fs.unlinkSync(subtitlePath);
+          fs.unlinkSync(outputPath);
+        }
+      })
+      .on("error", (err) => {
+        console.error("FFMPEG ERROR (/clip):", err);
+        res.status(500).json({ error: "ffmpeg error", detail: err.message });
+      });
+
+  } catch (err) {
+    console.error("SERVER ERROR (/clip):", err);
+    res.status(500).json({ error: err.message || "Server error" });
+  }
+});
+
+// --------------------------------------------------
+// /final-render（フェード入り最終連結API）
+// --------------------------------------------------
+app.post("/final-render", async (req, res) => {
+  try {
+    const { concatList } = req.body;
+    const files = req.files;
+
+    if (!concatList || !files) {
+      return res.status(400).json({
+        error: "Missing concatList or binary clips"
+      });
+    }
+
+    console.log("Starting FINAL RENDER with fade...");
+
+    const id = uuidv4();
+    const listPath = `/tmp/list-${id}.txt`;
+    const concatOutput = `/tmp/concat-${id}.mp4`;
+    const finalOutput = `/tmp/final-${id}.mp4`;
+
+    const clipKeys = Object.keys(files);
+
+    for (const key of clipKeys) {
+      const filePath = `/tmp/${key}.mp4`;
+      fs.writeFileSync(filePath, files[key].data);
+    }
+
+    fs.writeFileSync(listPath, concatList);
+
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(listPath)
+        .inputOptions(["-f concat", "-safe 0"])
+        .outputOptions(["-c copy"])
+        .save(concatOutput)
+        .on("end", resolve)
+        .on("error", reject);
+    });
+
+    const duration = await new Promise((resolve, reject) => {
+      ffmpeg.ffprobe(concatOutput, (err, metadata) => {
+        if (err) reject(err);
+        else resolve(metadata.format.duration);
+      });
+    });
+
+    const fadeInSec = 0.8;
+    const fadeOutSec = 0.8;
+
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(concatOutput)
+        .videoFilters([
+          `fade=t=in:st=0:d=${fadeInSec}`,
+          `fade=t=out:st=${duration - fadeOutSec}:d=${fadeOutSec}`
+        ])
+        .audioFilters([
+          `afade=t=in:st=0:d=${fadeInSec}`,
+          `afade=t=out:st=${duration - fadeOutSec}:d=${fadeOutSec}`
+        ])
+        .outputOptions([
+          "-c:v libx264",
+          "-c:a aac",
+          "-pix_fmt yuv420p"
+        ])
+        .save(finalOutput)
+        .on("end", resolve)
+        .on("error", reject);
+    });
+
+    const finalBuffer = fs.readFileSync(finalOutput);
+    res.setHeader("Content-Type", "video/mp4");
+    res.send(finalBuffer);
+
+    fs.unlinkSync(listPath);
+    fs.unlinkSync(concatOutput);
+    fs.unlinkSync(finalOutput);
+    for (const key of clipKeys) {
+      fs.unlinkSync(`/tmp/${key}.mp4`);
+    }
+
+  } catch (err) {
+    console.error("SERVER ERROR (/final-render):", err);
+    res.status(500).json({ error: err.message || "Server error" });
+  }
+});
+
+// --------------------------------------------------
+const PORT = process.env.PORT || 8000;
+app.listen(PORT, () => {
+  console.log(`API running on port ${PORT}`);
+});
