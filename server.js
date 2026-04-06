@@ -154,43 +154,94 @@ app.post("/clip", async (req, res) => {
 });
 
 // --------------------------------------------------
-// /final-render（フェード入り最終連結API）
-// JSON + Binary（n8n互換）
+// /final-render-url（URL版フェード入り最終連結API）
+// JSON（URLのみ）
 // --------------------------------------------------
-app.post("/final-render", async (req, res) => {
-  try {
-    const { concatList, clips } = req.body;
 
-    if (!concatList || !clips) {
+import express from "express";
+import axios from "axios";
+import fs from "fs";
+import ffmpeg from "fluent-ffmpeg";
+import { v4 as uuidv4 } from "uuid";
+
+const app = express();
+app.use(express.json({ limit: "200mb" }));
+
+// URL → Buffer
+async function downloadToBuffer(url) {
+  const res = await axios.get(url, { responseType: "arraybuffer" });
+  return Buffer.from(res.data);
+}
+
+// URL → /tmp に保存
+async function downloadToTmp(url, filePath) {
+  const buffer = await downloadToBuffer(url);
+  fs.writeFileSync(filePath, buffer);
+  return filePath;
+}
+
+app.post("/final-render-url", async (req, res) => {
+  try {
+    const { clips } = req.body;
+
+    if (!clips || !Array.isArray(clips)) {
       return res.status(400).json({
-        error: "Missing concatList or clips"
+        error: "Missing or invalid clips array"
       });
     }
 
-    console.log("Starting FINAL RENDER with fade...");
+    console.log("Starting FINAL RENDER (URL version)...");
 
     const id = uuidv4();
-    const listPath = `/tmp/list-${id}.txt`;
+    const concatListPath = `/tmp/list-${id}.txt`;
     const concatOutput = `/tmp/concat-${id}.mp4`;
     const finalOutput = `/tmp/final-${id}.mp4`;
 
-    // clips = { clip_0: { data: <Buffer> }, clip_1: {...} }
-    const clipKeys = Object.keys(clips);
+    let concatList = "";
 
-    // Binary を /tmp に書き出す
-    for (const key of clipKeys) {
-      const filePath = `/tmp/${key}.mp4`;
-      const buffer = Buffer.from(clips[key].data);
-      fs.writeFileSync(filePath, buffer);
+    // 各クリップを生成
+    for (const clip of clips) {
+      const clipId = clip.clipId;
+
+      const bgPath = `/tmp/bg-${clipId}.mp4`;
+      const audioPath = `/tmp/audio-${clipId}.mp3`;
+      const subtitlePath = `/tmp/sub-${clipId}.png`;
+      const outPath = `/tmp/clip-${clipId}.mp4`;
+
+      // URL から素材をダウンロード
+      await downloadToTmp(clip.backgroundVideo, bgPath);
+      await downloadToTmp(clip.audioUrl, audioPath);
+      await downloadToTmp(clip.subtitlePng, subtitlePath);
+
+      // ffmpeg で1クリップ生成
+      await new Promise((resolve, reject) => {
+        ffmpeg()
+          .input(bgPath)
+          .input(audioPath)
+          .input(subtitlePath)
+          .complexFilter([
+            "[0:v][2:v] overlay=(main_w-overlay_w)/2:(main_h-overlay_h)-50"
+          ])
+          .outputOptions([
+            "-c:v libx264",
+            "-c:a aac",
+            "-pix_fmt yuv420p"
+          ])
+          .save(outPath)
+          .on("end", resolve)
+          .on("error", reject);
+      });
+
+      concatList += `file '${outPath}'\n`;
     }
 
-    // concatList を list.txt に書き出す
-    fs.writeFileSync(listPath, concatList);
+    // concatList を書き出し
+    fs.writeFileSync(concatListPath, concatList);
 
     // まずは concat
     await new Promise((resolve, reject) => {
       ffmpeg()
-        .input(listPath)
+        .input(concatListPath)
         .inputOptions(["-f concat", "-safe 0"])
         .outputOptions(["-c copy"])
         .save(concatOutput)
@@ -237,15 +288,21 @@ app.post("/final-render", async (req, res) => {
     res.send(finalBuffer);
 
     // 後片付け
-    fs.unlinkSync(listPath);
+    fs.unlinkSync(concatListPath);
     fs.unlinkSync(concatOutput);
     fs.unlinkSync(finalOutput);
-    for (const key of clipKeys) {
-      fs.unlinkSync(`/tmp/${key}.mp4`);
+
+    // 個別クリップの tmp も削除
+    for (const clip of clips) {
+      const clipId = clip.clipId;
+      fs.unlinkSync(`/tmp/bg-${clipId}.mp4`);
+      fs.unlinkSync(`/tmp/audio-${clipId}.mp3`);
+      fs.unlinkSync(`/tmp/sub-${clipId}.png`);
+      fs.unlinkSync(`/tmp/clip-${clipId}.mp4`);
     }
 
   } catch (err) {
-    console.error("SERVER ERROR (/final-render):", err);
+    console.error("SERVER ERROR (/final-render-url):", err);
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
