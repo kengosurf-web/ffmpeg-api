@@ -182,7 +182,9 @@ async function downloadToTmp(url, filePath) {
 
 app.post("/final-render-url", async (req, res) => {
   try {
-    const { clips } = req.body;
+    // ★ n8n の JSON フィールドは clips を "=[{...}]" の文字列で送ってくる
+    // 先頭の "=" を削除して JSON.parse する
+    const clips = JSON.parse(req.body.clips.replace(/^=/, ""));
 
     if (!clips || !Array.isArray(clips)) {
       return res.status(400).json({
