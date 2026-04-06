@@ -1,17 +1,18 @@
-FROM node:18
+FROM jrottenberg/ffmpeg:4.4-alpine AS ffmpeg
 
-# 作業ディレクトリ
+FROM node:18-alpine
+
 WORKDIR /app
 
-# 依存関係をインストール
+# ffmpeg をコピー
+COPY --from=ffmpeg /usr/local/bin/ffmpeg /usr/local/bin/
+COPY --from=ffmpeg /usr/local/bin/ffprobe /usr/local/bin/
+
 COPY package*.json ./
 RUN npm install
 
-# 残りのファイルをコピー
 COPY . .
 
-# Koyeb は 8000 を使う
 EXPOSE 8000
 
-# サーバー起動
 CMD ["node", "server.js"]
