@@ -55,57 +55,7 @@ function wait(ms) {
 }
 
 // --------------------------------------------------
-// /merge（音声連結API）
-// --------------------------------------------------
-app.post("/merge", async (req, res) => {
-  try {
-    const { factUrl, opinionUrl } = req.body;
-
-    if (!factUrl || !opinionUrl) {
-      return res.status(400).json({ error: "Missing factUrl or opinionUrl" });
-    }
-
-    console.log("Fetching audio files...");
-
-    const factBuffer = await fetchBinaryWithRetry(factUrl);
-    const opinionBuffer = await fetchBinaryWithRetry(opinionUrl);
-
-    const factPath = `/tmp/fact-${uuidv4()}.mp3`;
-    const opinionPath = `/tmp/opinion-${uuidv4()}.mp3`;
-    const outputPath = `/tmp/output-${uuidv4()}.mp3`;
-
-    fs.writeFileSync(factPath, factBuffer);
-    fs.writeFileSync(opinionPath, opinionBuffer);
-
-    ffmpeg()
-      .input(factPath)
-      .input(opinionPath)
-      .on("end", () => {
-        try {
-          const file = fs.readFileSync(outputPath);
-          res.setHeader("Content-Type", "audio/mpeg");
-          res.send(file);
-        } finally {
-          fs.unlinkSync(factPath);
-          fs.unlinkSync(opinionPath);
-          fs.unlinkSync(outputPath);
-        }
-      })
-      .on("error", (err) => {
-        console.error("FFMPEG ERROR:", err);
-        res.status(500).json({ error: "ffmpeg error", detail: err.message });
-      })
-      .mergeToFile(outputPath);
-
-  } catch (err) {
-    console.error("SERVER ERROR:", err);
-    res.status(500).json({ error: err.message || "Server error" });
-  }
-});
-
-
-// --------------------------------------------------
-// /clip（★新構造：1文クリップ生成API）
+// /clip（1文クリップ生成API）
 // --------------------------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -121,13 +71,11 @@ app.post("/clip", async (req, res) => {
 
     const id = uuidv4();
 
-    // 一時ファイル
     const bgPath = `/tmp/bg-${id}.mp4`;
     const audioPath = `/tmp/audio-${id}.mp3`;
     const subtitlePath = `/tmp/sub-${id}.png`;
     const outputPath = `/tmp/clip-${id}.mp4`;
 
-    // GitHub API → raw URL に変換
     let audioDownloadUrl = audioUrl;
     if (audioUrl.includes("api.github.com")) {
       audioDownloadUrl = audioUrl
@@ -136,7 +84,6 @@ app.post("/clip", async (req, res) => {
         .replace("?ref=main", "");
     }
 
-    // ダウンロード
     const bgBuffer = await fetchBinaryWithRetry(backgroundVideo);
     fs.writeFileSync(bgPath, bgBuffer);
 
@@ -146,212 +93,7 @@ app.post("/clip", async (req, res) => {
     const subBuffer = await fetchBinaryWithRetry(subtitlePng);
     fs.writeFileSync(subtitlePath, subBuffer);
 
-    // 音声の長さを取得（背景を同じ長さにするため）
     const audioDuration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(audioPath, (err, metadata) => {
         if (err) reject(err);
         else resolve(metadata.format.duration);
-      });
-    });
-
-    // ffmpeg 合成（背景を音声と同じ長さに強制 + 字幕を50%縮小）
-    ffmpeg()
-      .input(bgPath)          // 0:v
-      .input(audioPath)       // 1:a
-      .input(subtitlePath)    // 2:v
-      .complexFilter([
-        // 字幕PNGを縮小
-        {
-          filter: "scale",
-          options: { w: "iw*0.5", h: "ih*0.5" },
-          inputs: "[2:v]",
-          outputs: "sub_scaled"
-        },
-        // 背景に字幕を重ねる
-        {
-          filter: "overlay",
-          inputs: ["[0:v]", "sub_scaled"],
-          options: {
-            x: "(W-w)/2",
-            y: "H-h-80"
-          }
-        }
-      ])
-      .outputOptions([
-        "-map 0:v",   // 背景映像
-        "-map 1:a",   // 音声（確実に拾う）
-        "-c:v libx264",
-        "-c:a aac",
-        "-pix_fmt yuv420p",
-        `-t ${audioDuration}`, // 映像を音声と同じ長さに
-        "-shortest"
-      ])
-      .save(outputPath)
-      .on("end", () => {
-        try {
-          const file = fs.readFileSync(outputPath);
-          res.setHeader("Content-Type", "video/mp4");
-          res.send(file);
-        } finally {
-          fs.unlinkSync(bgPath);
-          fs.unlinkSync(audioPath);
-          fs.unlinkSync(subtitlePath);
-          fs.unlinkSync(outputPath);
-        }
-      })
-      .on("error", (err) => {
-        console.error("FFMPEG ERROR (/clip):", err);
-        res.status(500).json({ error: "ffmpeg error", detail: err.message });
-      });
-
-  } catch (err) {
-    console.error("SERVER ERROR (/clip):", err);
-    res.status(500).json({ error: err.message || "Server error" });
-  }
-});
-
-
------------------
-// /render（★旧構造：タイムライン方式）
-// → 後で削除予定のため “旧JS” と明記
-// --------------------------------------------------
-app.post("/render", async (req, res) => {
-  try {
-    let body = req.body;
-    if (Array.isArray(body)) body = body[0];
-
-    const { background, audio, top, bottom, subtitles } = body;
-
-    if (!background || !audio || !top || !bottom || !Array.isArray(subtitles)) {
-      return res.status(400).json({
-        error: "Missing background, audio, top, bottom, or subtitles"
-      });
-    }
-
-    console.log("Downloading assets... (OLD RENDER)");
-
-    // 背景
-    const bgBuffer = await fetchBinaryWithRetry(background);
-    const bgPath = `/tmp/bg-${uuidv4()}.mp4`;
-    fs.writeFileSync(bgPath, bgBuffer);
-
-    // 音声
-    const audioBuffer = await fetchBinaryWithRetry(audio);
-    const audioPath = `/tmp/audio-${uuidv4()}.mp3`;
-    fs.writeFileSync(audioPath, audioBuffer);
-
-    // トップ画像
-    const topBuffer = await fetchBinaryWithRetry(top);
-    const topPath = `/tmp/top-${uuidv4()}.png`;
-    fs.writeFileSync(topPath, topBuffer);
-
-    // ボトム画像
-    const bottomBuffer = await fetchBinaryWithRetry(bottom);
-    const bottomPath = `/tmp/bottom-${uuidv4()}.png`;
-    fs.writeFileSync(bottomPath, bottomBuffer);
-
-    // 字幕 PNG
-    const pngPaths = [];
-    for (const sub of subtitles) {
-      const buf = await fetchBinaryWithRetry(sub.url);
-      const p = `/tmp/sub-${uuidv4()}.png`;
-      fs.writeFileSync(p, buf);
-      pngPaths.push({ path: p, start: sub.start, length: sub.length });
-    }
-
-    const outputPath = `/tmp/video-${uuidv4()}.mp4`;
-
-    // --------------------------------------------------
-    // 字幕 overlay（旧構造）
-    // --------------------------------------------------
-    const filter = [];
-
-    filter.push({
-      filter: "null",
-      inputs: "0:v",
-      outputs: "base"
-    });
-
-    filter.push({
-      filter: "overlay",
-      inputs: ["base", "2:v"],
-      options: { x: "(W-w)/2", y: "0" },
-      outputs: "v_top"
-    });
-
-    filter.push({
-      filter: "overlay",
-      inputs: ["v_top", "3:v"],
-      options: { x: "(W-w)/2", y: "H-h" },
-      outputs: "v_tb"
-    });
-
-    let lastLabel = "v_tb";
-
-    pngPaths.forEach((sub, i) => {
-      const label = `v_sub_${i}`;
-      filter.push({
-        filter: "overlay",
-        inputs: [lastLabel, `${i + 4}:v`],
-        options: {
-          x: "(W-w)/2",
-          y: "H-h-288",
-          enable: `between(t,${sub.start},${sub.start + sub.length})`
-        },
-        outputs: label
-      });
-      lastLabel = label;
-    });
-
-    const command = ffmpeg()
-      .input(bgPath)
-      .input(audioPath)
-      .input(topPath)
-      .input(bottomPath);
-
-    pngPaths.forEach((p) => command.input(p.path));
-
-    command
-      .complexFilter(filter)
-      .outputOptions([
-        "-map", `[${lastLabel}]`,
-        "-map", "1:a",
-        "-c:v", "libx264",
-        "-c:a", "aac",
-        "-pix_fmt", "yuv420p",
-        "-preset", "veryfast",
-        "-shortest"
-      ])
-      .on("end", () => {
-        try {
-          const file = fs.readFileSync(outputPath);
-          res.setHeader("Content-Type", "video/mp4");
-          res.send(file);
-        } finally {
-          fs.unlinkSync(bgPath);
-          fs.unlinkSync(audioPath);
-          fs.unlinkSync(topPath);
-          fs.unlinkSync(bottomPath);
-          fs.unlinkSync(outputPath);
-          pngPaths.forEach((p) => fs.unlinkSync(p.path));
-        }
-      })
-      .on("error", (err) => {
-        console.error("FFMPEG ERROR (OLD RENDER):", err);
-        res.status(500).json({ error: "ffmpeg error", detail: err.message });
-      })
-      .save(outputPath);
-
-  } catch (err) {
-    console.error("SERVER ERROR (OLD RENDER):", err);
-    res.status(500).json({ error: err.message || "Server error" });
-  }
-});
-
-// --------------------------------------------------
-// Koyeb ポート
-// --------------------------------------------------
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`API running on port ${PORT}`);
-});
