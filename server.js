@@ -3,9 +3,10 @@ import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
 import { v4 as uuidv4 } from "uuid";
 import fetch from "node-fetch";
+import axios from "axios";
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "200mb" }));
 
 // --------------------------------------------------
 // GitHub Raw 対策（HTML/0byte/非バイナリをリトライ）
@@ -53,6 +54,13 @@ async function fetchBinaryWithRetry(url, maxRetries = 5) {
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// --------------------------------------------------
+// Health Check（Koyeb が /clip を叩かないようにする）
+// --------------------------------------------------
+app.get("/health", (req, res) => {
+  res.status(200).send("OK");
+});
 
 // --------------------------------------------------
 // /clip（1文クリップ生成API）
@@ -153,82 +161,22 @@ app.post("/clip", async (req, res) => {
   }
 });
 
-
 // --------------------------------------------------
-// /final-render-url（URL版フェード入り最終連結API）
-// JSON（URLのみ）
+// FINAL RENDER URL（フェード入り最終連結API）
 // --------------------------------------------------
-
-import express from "express";
-import axios from "axios";
-import fs from "fs";
-import ffmpeg from "fluent-ffmpeg";
-import { v4 as uuidv4 } from "uuid";
-
-const app = express();
-app.use(express.json({ limit: "200mb" }));
-
-// --------------------------------------------------
-// Health Check（Koyeb が /clip を叩かないようにする）
-// --------------------------------------------------
-app.get("/health", (req, res) => {
-  res.status(200).send("OK");
-});
-
-// URL → Buffer
 async function downloadToBuffer(url) {
   const res = await axios.get(url, { responseType: "arraybuffer" });
   return Buffer.from(res.data);
 }
 
-// URL → /tmp に保存
 async function downloadToTmp(url, filePath) {
   const buffer = await downloadToBuffer(url);
   fs.writeFileSync(filePath, buffer);
   return filePath;
 }
 
-// --------------------------------------------------
-// /final-render-url（URL版フェード入り最終連結API）
-// JSON（URLのみ）
-// --------------------------------------------------
-
-import express from "express";
-import axios from "axios";
-import fs from "fs";
-import ffmpeg from "fluent-ffmpeg";
-import { v4 as uuidv4 } from "uuid";
-
-const app = express();
-app.use(express.json({ limit: "200mb" }));
-
-// --------------------------------------------------
-// Health Check（Koyeb が /clip を叩かないようにする）
-// --------------------------------------------------
-app.get("/health", (req, res) => {
-  res.status(200).send("OK");
-});
-
-// URL → Buffer
-async function downloadToBuffer(url) {
-  const res = await axios.get(url, { responseType: "arraybuffer" });
-  return Buffer.from(res.data);
-}
-
-// URL → /tmp に保存
-async function downloadToTmp(url, filePath) {
-  const buffer = await downloadToBuffer(url);
-  fs.writeFileSync(filePath, buffer);
-  return filePath;
-}
-
-// --------------------------------------------------
-// FINAL RENDER URL
-// --------------------------------------------------
 app.post("/final-render-url", async (req, res) => {
   try {
-    // ★ n8n の JSON フィールドは clips を "=[{...}]" の文字列で送ってくる
-    // 先頭の "=" を削除して JSON.parse する
     const clips = JSON.parse(req.body.clips.replace(/^=/, ""));
 
     if (!clips || !Array.isArray(clips)) {
@@ -246,7 +194,6 @@ app.post("/final-render-url", async (req, res) => {
 
     let concatList = "";
 
-    // 各クリップを生成
     for (const clip of clips) {
       const clipId = clip.clipId;
 
@@ -255,12 +202,10 @@ app.post("/final-render-url", async (req, res) => {
       const subtitlePath = `/tmp/sub-${clipId}.png`;
       const outPath = `/tmp/clip-${clipId}.mp4`;
 
-      // URL から素材をダウンロード
       await downloadToTmp(clip.backgroundVideo, bgPath);
       await downloadToTmp(clip.audioUrl, audioPath);
       await downloadToTmp(clip.subtitlePng, subtitlePath);
 
-      // ffmpeg で1クリップ生成
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgPath)
@@ -282,10 +227,8 @@ app.post("/final-render-url", async (req, res) => {
       concatList += `file '${outPath}'\n`;
     }
 
-    // concatList を書き出し
     fs.writeFileSync(concatListPath, concatList);
 
-    // まずは concat
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(concatListPath)
@@ -296,7 +239,6 @@ app.post("/final-render-url", async (req, res) => {
         .on("error", reject);
     });
 
-    // duration を取得
     const duration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(concatOutput, (err, metadata) => {
         if (err) reject(err);
@@ -307,7 +249,6 @@ app.post("/final-render-url", async (req, res) => {
     const fadeInSec = 0.8;
     const fadeOutSec = 0.8;
 
-    // フェード入り・フェードアウト
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(concatOutput)
@@ -329,17 +270,14 @@ app.post("/final-render-url", async (req, res) => {
         .on("error", reject);
     });
 
-    // 完成した動画を返す
     const finalBuffer = fs.readFileSync(finalOutput);
     res.setHeader("Content-Type", "video/mp4");
     res.send(finalBuffer);
 
-    // 後片付け
     fs.unlinkSync(concatListPath);
     fs.unlinkSync(concatOutput);
     fs.unlinkSync(finalOutput);
 
-    // 個別クリップの tmp も削除
     for (const clip of clips) {
       const clipId = clip.clipId;
       fs.unlinkSync(`/tmp/bg-${clipId}.mp4`);
@@ -359,3 +297,4 @@ const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
 });
+
