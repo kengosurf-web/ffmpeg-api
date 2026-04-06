@@ -2,14 +2,14 @@ FROM jrottenberg/ffmpeg:4.4-alpine AS ffmpeg
 
 FROM node:18-alpine
 
-# cache-bust-3
+# cache-bust-4
 
 WORKDIR /app
 
 # ffmpeg と必要なライブラリをコピー
 COPY --from=ffmpeg /usr/local/bin/ffmpeg /usr/local/bin/
 COPY --from=ffmpeg /usr/local/bin/ffprobe /usr/local/bin/
-COPY --from=ffmpeg /usr/local/lib /usr/local/lib   # ← lib だけでOK！
+COPY --from=ffmpeg /usr/local/lib /usr/local/lib   # lib only
 
 COPY package*.json ./
 RUN npm install
