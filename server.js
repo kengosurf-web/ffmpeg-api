@@ -153,6 +153,7 @@ app.post("/clip", async (req, res) => {
   }
 });
 
+
 // --------------------------------------------------
 // /final-render-url（URL版フェード入り最終連結API）
 // JSON（URLのみ）
@@ -167,6 +168,13 @@ import { v4 as uuidv4 } from "uuid";
 const app = express();
 app.use(express.json({ limit: "200mb" }));
 
+// --------------------------------------------------
+// Health Check（Koyeb が /clip を叩かないようにする）
+// --------------------------------------------------
+app.get("/health", (req, res) => {
+  res.status(200).send("OK");
+});
+
 // URL → Buffer
 async function downloadToBuffer(url) {
   const res = await axios.get(url, { responseType: "arraybuffer" });
@@ -180,6 +188,43 @@ async function downloadToTmp(url, filePath) {
   return filePath;
 }
 
+// --------------------------------------------------
+// /final-render-url（URL版フェード入り最終連結API）
+// JSON（URLのみ）
+// --------------------------------------------------
+
+import express from "express";
+import axios from "axios";
+import fs from "fs";
+import ffmpeg from "fluent-ffmpeg";
+import { v4 as uuidv4 } from "uuid";
+
+const app = express();
+app.use(express.json({ limit: "200mb" }));
+
+// --------------------------------------------------
+// Health Check（Koyeb が /clip を叩かないようにする）
+// --------------------------------------------------
+app.get("/health", (req, res) => {
+  res.status(200).send("OK");
+});
+
+// URL → Buffer
+async function downloadToBuffer(url) {
+  const res = await axios.get(url, { responseType: "arraybuffer" });
+  return Buffer.from(res.data);
+}
+
+// URL → /tmp に保存
+async function downloadToTmp(url, filePath) {
+  const buffer = await downloadToBuffer(url);
+  fs.writeFileSync(filePath, buffer);
+  return filePath;
+}
+
+// --------------------------------------------------
+// FINAL RENDER URL
+// --------------------------------------------------
 app.post("/final-render-url", async (req, res) => {
   try {
     // ★ n8n の JSON フィールドは clips を "=[{...}]" の文字列で送ってくる
