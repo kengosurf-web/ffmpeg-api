@@ -122,12 +122,13 @@ app.post("/clip", async (req, res) => {
 
     console.log("Generating 1-sentence clip...");
 
-    const id = uuidv4();
+    // A+B：絶対衝突しないユニークID
+    const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
-    const bgPath = `/tmp/bg-${id}.mp4`;
-    const audioPath = `/tmp/audio-${id}.mp3`;
-    const subtitlePath = `/tmp/sub-${id}.png`;
-    const outputPath = `/tmp/clip-${id}.mp4`;
+    const bgPath = `/tmp/bg-${unique}.mp4`;
+    const audioPath = `/tmp/audio-${unique}.mp3`;
+    const subtitlePath = `/tmp/sub-${unique}.png`;
+    const outputPath = `/tmp/clip-${unique}.mp4`;
 
     // GitHub URL 修正
     let audioDownloadUrl = audioUrl;
@@ -138,26 +139,27 @@ app.post("/clip", async (req, res) => {
         .replace("?ref=main", "");
     }
 
-    // ダウンロード
-    fs.writeFileSync(bgPath, await fetchBinaryWithRetry(backgroundVideo));
-    fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrl));
-    fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitlePng));
+    // A：ダウンロードもキューに入れて完全直列化
+    const clipBuffer = await enqueueFfmpegJob(async () => {
+      // ---- ダウンロード（直列） ----
+      fs.writeFileSync(bgPath, await fetchBinaryWithRetry(backgroundVideo));
+      fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrl));
+      fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitlePng));
 
-    // 音声の長さ
-    const audioDuration = await new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(audioPath, (err, metadata) => {
-        if (err) reject(err);
-        else resolve(metadata.format.duration);
+      // ---- 音声の長さ ----
+      const audioDuration = await new Promise((resolve, reject) => {
+        ffmpeg.ffprobe(audioPath, (err, metadata) => {
+          if (err) reject(err);
+          else resolve(metadata.format.duration);
+        });
       });
-    });
 
-    // ffmpeg 実行（キュー経由）
-    const clipBuffer = await enqueueFfmpegJob(() => {
+      // ---- ffmpeg（直列） ----
       return new Promise((resolve, reject) => {
         ffmpeg()
-          .input(bgPath)       // 0:v（音声は無視）
-          .input(audioPath)    // 1:a（TTS）
-          .input(subtitlePath) // 2:v（字幕PNG）
+          .input(bgPath)       // 0:v
+          .input(audioPath)    // 1:a
+          .input(subtitlePath) // 2:v
           .complexFilter([
             // 字幕縮小
             {
@@ -166,7 +168,6 @@ app.post("/clip", async (req, res) => {
               inputs: "[2:v]",
               outputs: "sub_scaled",
             },
-
             // 字幕 overlay
             {
               filter: "overlay",
@@ -179,7 +180,7 @@ app.post("/clip", async (req, res) => {
             },
           ])
           .outputOptions([
-            "-an",                // 背景動画の音声を完全ミュート
+            "-an",                // 背景音声ミュート
             "-map [video]",       // 映像
             "-map 1:a",           // TTS 音声のみ
             "-c:v libx264",
