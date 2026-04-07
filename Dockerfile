@@ -1,14 +1,13 @@
-FROM jrottenberg/ffmpeg:6.0 as ffmpeg
+FROM linuxserver/ffmpeg:latest as ffmpeg
 
 FROM node:18
 
-# cache-bust-8
+# cache-bust-9
 
 WORKDIR /app
 
-COPY --from=ffmpeg /usr/local/bin/ffmpeg /usr/local/bin/
-COPY --from=ffmpeg /usr/local/bin/ffprobe /usr/local/bin/
-COPY --from=ffmpeg /usr/local/lib /usr/local/lib
+COPY --from=ffmpeg /usr/bin/ffmpeg /usr/local/bin/
+COPY --from=ffmpeg /usr/bin/ffprobe /usr/local/bin/
 
 COPY package*.json ./
 RUN npm install
