@@ -67,6 +67,40 @@ async function downloadToTmp(url, filePath) {
 }
 
 // ------------------------------
+// Global FFmpeg Job Queue
+// ------------------------------
+const ffmpegQueue = [];
+let isProcessingQueue = false;
+
+function enqueueFfmpegJob(jobFn) {
+  return new Promise((resolve, reject) => {
+    ffmpegQueue.push({ jobFn, resolve, reject });
+    processNextFfmpegJob();
+  });
+}
+
+async function processNextFfmpegJob() {
+  if (isProcessingQueue) return;
+  const item = ffmpegQueue.shift();
+  if (!item) return;
+
+  isProcessingQueue = true;
+  const { jobFn, resolve, reject } = item;
+
+  try {
+    const result = await jobFn();
+    resolve(result);
+  } catch (err) {
+    reject(err);
+  } finally {
+    isProcessingQueue = false;
+    if (ffmpegQueue.length > 0) {
+      processNextFfmpegJob();
+    }
+  }
+}
+
+// ------------------------------
 // Health Check
 // ------------------------------
 app.get("/health", (req, res) => {
@@ -75,6 +109,7 @@ app.get("/health", (req, res) => {
 
 // ------------------------------
 // /clip（1文クリップ生成API）
+// → ffmpeg は必ずキュー経由で1つずつ実行
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -82,7 +117,7 @@ app.post("/clip", async (req, res) => {
 
     if (!subtitlePng || !audioUrl || !backgroundVideo) {
       return res.status(400).json({
-        error: "Missing subtitlePng, audioUrl, or backgroundVideo"
+        error: "Missing subtitlePng, audioUrl, or backgroundVideo",
       });
     }
 
@@ -119,52 +154,81 @@ app.post("/clip", async (req, res) => {
       });
     });
 
-    ffmpeg()
-      .input(bgPath)
-      .input(audioPath)
-      .input(subtitlePath)
-      .complexFilter([
-        {
-          filter: "scale",
-          options: { w: "iw*0.5", h: "ih*0.5" },
-          inputs: "[2:v]",
-          outputs: "sub_scaled"
-        },
-        {
-          filter: "overlay",
-          inputs: ["[0:v]", "sub_scaled"],
-          options: {
-            x: "(W-w)/2",
-            y: "H-h-80"
-          }
-        }
-      ])
-      .outputOptions([
-        "-map 0:v",
-        "-map 1:a",
-        "-c:v libx264",
-        "-c:a aac",
-        "-pix_fmt yuv420p",
-        `-t ${audioDuration}`,
-        "-shortest"
-      ])
-      .save(outputPath)
-      .on("end", () => {
-        try {
-          const file = fs.readFileSync(outputPath);
-          res.setHeader("Content-Type", "video/mp4");
-          res.send(file);
-        } finally {
-          fs.unlinkSync(bgPath);
-          fs.unlinkSync(audioPath);
-          fs.unlinkSync(subtitlePath);
-          fs.unlinkSync(outputPath);
-        }
-      })
-      .on("error", (err) => {
-        console.error("FFMPEG ERROR (/clip):", err);
-        res.status(500).json({ error: "ffmpeg error", detail: err.message });
+    // ffmpeg 実行部分をキューに乗せる
+    const clipBuffer = await enqueueFfmpegJob(() => {
+      return new Promise((resolve, reject) => {
+        ffmpeg()
+          .input(bgPath)
+          .input(audioPath)
+          .input(subtitlePath)
+          .complexFilter([
+            {
+              filter: "scale",
+              options: { w: "iw*0.5", h: "ih*0.5" },
+              inputs: "[2:v]",
+              outputs: "sub_scaled",
+            },
+            {
+              filter: "overlay",
+              inputs: ["[0:v]", "sub_scaled"],
+              options: {
+                x: "(W-w)/2",
+                y: "H-h-80",
+              },
+            },
+          ])
+          .outputOptions([
+            "-map 0:v",
+            "-map 1:a",
+            "-c:v libx264",
+            "-c:a aac",
+            "-pix_fmt yuv420p",
+            `-t ${audioDuration}`,
+            "-shortest",
+          ])
+          .save(outputPath)
+          .on("end", () => {
+            try {
+              const file = fs.readFileSync(outputPath);
+              resolve(file);
+            } catch (e) {
+              reject(e);
+            } finally {
+              try {
+                fs.unlinkSync(bgPath);
+              } catch {}
+              try {
+                fs.unlinkSync(audioPath);
+              } catch {}
+              try {
+                fs.unlinkSync(subtitlePath);
+              } catch {}
+              try {
+                fs.unlinkSync(outputPath);
+              } catch {}
+            }
+          })
+          .on("error", (err) => {
+            console.error("FFMPEG ERROR (/clip):", err);
+            try {
+              fs.unlinkSync(bgPath);
+            } catch {}
+            try {
+              fs.unlinkSync(audioPath);
+            } catch {}
+            try {
+              fs.unlinkSync(subtitlePath);
+            } catch {}
+            try {
+              fs.unlinkSync(outputPath);
+            } catch {}
+            reject(err);
+          });
       });
+    });
+
+    res.setHeader("Content-Type", "video/mp4");
+    res.send(clipBuffer);
 
   } catch (err) {
     console.error("SERVER ERROR (/clip):", err);
@@ -179,6 +243,7 @@ const jobs = {}; // jobId → { status, outputPath }
 
 // ------------------------------
 // POST /final-render-url（非同期ジョブ登録）
+// → ffmpeg はキュー経由でバックグラウンド実行
 // ------------------------------
 app.post("/final-render-url", async (req, res) => {
   try {
@@ -193,12 +258,18 @@ app.post("/final-render-url", async (req, res) => {
 
     console.log(`Job registered: ${jobId}`);
 
-    // 非同期で ffmpeg を実行
-    processFinalRenderJob(jobId, clips);
+    // 非同期でキューに積む（ここでは await しない）
+    enqueueFfmpegJob(() => processFinalRenderJob(jobId, clips))
+      .catch((err) => {
+        console.error("JOB ERROR (queued):", err);
+        if (jobs[jobId]) {
+          jobs[jobId].status = "error";
+        }
+      });
 
     res.json({
       jobId,
-      status: "processing"
+      status: "processing",
     });
 
   } catch (err) {
@@ -223,13 +294,13 @@ app.get("/final-render-status", (req, res) => {
     return res.json({
       jobId,
       status: "done",
-      url: `/final-result/${jobId}`
+      url: `/final-result/${jobId}`,
     });
   }
 
   res.json({
     jobId,
-    status: job.status
+    status: job.status,
   });
 });
 
@@ -254,17 +325,18 @@ app.get("/final-result/:jobId", (req, res) => {
 });
 
 // ------------------------------
-// バックグラウンド処理
+// バックグラウンド処理（最終レンダー）
+// ※ここ自体もキュー経由で呼ばれるので、内部の ffmpeg はそのままでOK
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
+  console.log(`Processing job: ${jobId}`);
+
+  const id = uuidv4();
+  const concatListPath = `/tmp/list-${id}.txt`;
+  const concatOutput = `/tmp/concat-${id}.mp4`;
+  const finalOutput = `/tmp/final-${id}.mp4`;
+
   try {
-    console.log(`Processing job: ${jobId}`);
-
-    const id = uuidv4();
-    const concatListPath = `/tmp/list-${id}.txt`;
-    const concatOutput = `/tmp/concat-${id}.mp4`;
-    const finalOutput = `/tmp/final-${id}.mp4`;
-
     let concatList = "";
 
     for (const clip of clips) {
@@ -279,22 +351,47 @@ async function processFinalRenderJob(jobId, clips) {
       await downloadToTmp(clip.audioUrl, audioPath);
       await downloadToTmp(clip.subtitlePng, subtitlePath);
 
+      // 各クリップの ffmpeg も「この関数全体」がすでにキュー上なので、
+      // ここはそのまま直列で OK
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgPath)
           .input(audioPath)
           .input(subtitlePath)
           .complexFilter([
-            "[0:v][2:v] overlay=(main_w-overlay_w)/2:(main_h-overlay_h)-50"
+            "[0:v][2:v] overlay=(main_w-overlay_w)/2:(main_h-overlay_h)-50",
           ])
           .outputOptions([
             "-c:v libx264",
             "-c:a aac",
-            "-pix_fmt yuv420p"
+            "-pix_fmt yuv420p",
           ])
           .save(outPath)
-          .on("end", resolve)
-          .on("error", reject);
+          .on("end", () => {
+            try {
+              fs.unlinkSync(bgPath);
+            } catch {}
+            try {
+              fs.unlinkSync(audioPath);
+            } catch {}
+            try {
+              fs.unlinkSync(subtitlePath);
+            } catch {}
+            resolve();
+          })
+          .on("error", (err) => {
+            console.error("FFMPEG ERROR (per-clip in final):", err);
+            try {
+              fs.unlinkSync(bgPath);
+            } catch {}
+            try {
+              fs.unlinkSync(audioPath);
+            } catch {}
+            try {
+              fs.unlinkSync(subtitlePath);
+            } catch {}
+            reject(err);
+          });
       });
 
       concatList += `file '${outPath}'\n`;
@@ -308,8 +405,19 @@ async function processFinalRenderJob(jobId, clips) {
         .inputOptions(["-f concat", "-safe 0"])
         .outputOptions(["-c copy"])
         .save(concatOutput)
-        .on("end", resolve)
-        .on("error", reject);
+        .on("end", () => {
+          try {
+            fs.unlinkSync(concatListPath);
+          } catch {}
+          resolve();
+        })
+        .on("error", (err) => {
+          console.error("FFMPEG ERROR (concat):", err);
+          try {
+            fs.unlinkSync(concatListPath);
+          } catch {}
+          reject(err);
+        });
     });
 
     const duration = await new Promise((resolve, reject) => {
@@ -327,20 +435,31 @@ async function processFinalRenderJob(jobId, clips) {
         .input(concatOutput)
         .videoFilters([
           `fade=t=in:st=0:d=${fadeInSec}`,
-          `fade=t=out:st=${duration - fadeOutSec}:d=${fadeOutSec}`
+          `fade=t=out:st=${duration - fadeOutSec}:d=${fadeOutSec}`,
         ])
         .audioFilters([
           `afade=t=in:st=0:d=${fadeInSec}`,
-          `afade=t=out:st=${duration - fadeOutSec}:d=${fadeOutSec}`
+          `afade=t=out:st=${duration - fadeOutSec}:d=${fadeOutSec}`,
         ])
         .outputOptions([
           "-c:v libx264",
           "-c:a aac",
-          "-pix_fmt yuv420p"
+          "-pix_fmt yuv420p",
         ])
         .save(finalOutput)
-        .on("end", resolve)
-        .on("error", reject);
+        .on("end", () => {
+          try {
+            fs.unlinkSync(concatOutput);
+          } catch {}
+          resolve();
+        })
+        .on("error", (err) => {
+          console.error("FFMPEG ERROR (fade/final):", err);
+          try {
+            fs.unlinkSync(concatOutput);
+          } catch {}
+          reject(err);
+        });
     });
 
     jobs[jobId].status = "done";
@@ -350,7 +469,19 @@ async function processFinalRenderJob(jobId, clips) {
 
   } catch (err) {
     console.error("JOB ERROR:", err);
-    jobs[jobId].status = "error";
+    if (jobs[jobId]) {
+      jobs[jobId].status = "error";
+    }
+    try {
+      fs.unlinkSync(concatListPath);
+    } catch {}
+    try {
+      fs.unlinkSync(concatOutput);
+    } catch {}
+    try {
+      fs.unlinkSync(finalOutput);
+    } catch {}
+    throw err;
   }
 }
 
