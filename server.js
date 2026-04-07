@@ -129,6 +129,7 @@ app.post("/clip", async (req, res) => {
     const subtitlePath = `/tmp/sub-${id}.png`;
     const outputPath = `/tmp/clip-${id}.mp4`;
 
+    // GitHub URL 修正
     let audioDownloadUrl = audioUrl;
     if (audioUrl.includes("api.github.com")) {
       audioDownloadUrl = audioUrl
@@ -137,10 +138,12 @@ app.post("/clip", async (req, res) => {
         .replace("?ref=main", "");
     }
 
+    // ダウンロード
     fs.writeFileSync(bgPath, await fetchBinaryWithRetry(backgroundVideo));
     fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrl));
     fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitlePng));
 
+    // 音声の長さ
     const audioDuration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(audioPath, (err, metadata) => {
         if (err) reject(err);
@@ -148,12 +151,13 @@ app.post("/clip", async (req, res) => {
       });
     });
 
+    // ffmpeg 実行（キュー経由）
     const clipBuffer = await enqueueFfmpegJob(() => {
       return new Promise((resolve, reject) => {
         ffmpeg()
-          .input(bgPath)       // 0:v, 0:a
-          .input(audioPath)    // 1:a (TTS)
-          .input(subtitlePath) // 2:v
+          .input(bgPath)       // 0:v（音声は無視）
+          .input(audioPath)    // 1:a（TTS）
+          .input(subtitlePath) // 2:v（字幕PNG）
           .complexFilter([
             // 字幕縮小
             {
@@ -173,26 +177,11 @@ app.post("/clip", async (req, res) => {
               },
               outputs: "video",
             },
-
-            // 背景音声を 50%
-            {
-              filter: "volume",
-              options: "0.5",
-              inputs: "0:a",
-              outputs: "bg_low",
-            },
-
-            // TTS + 背景音声を合成（TTS優先）
-            {
-              filter: "amix",
-              options: "inputs=2:dropout_transition=0",
-              inputs: ["1:a", "bg_low"],
-              outputs: "audio_mix",
-            },
           ])
           .outputOptions([
-            "-map [video]",
-            "-map [audio_mix]",
+            "-an",                // 背景動画の音声を完全ミュート
+            "-map [video]",       // 映像
+            "-map 1:a",           // TTS 音声のみ
             "-c:v libx264",
             "-c:a aac",
             "-pix_fmt yuv420p",
@@ -232,6 +221,7 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
+
 
 // ------------------------------
 // 非同期ジョブ管理
