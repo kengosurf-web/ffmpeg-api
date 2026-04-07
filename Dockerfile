@@ -1,8 +1,8 @@
-FROM jrottenberg/ffmpeg:4.4 as ffmpeg
+FROM jrottenberg/ffmpeg:6.0 as ffmpeg
 
 FROM node:18
 
-# cache-bust-7
+# cache-bust-8
 
 WORKDIR /app
 
