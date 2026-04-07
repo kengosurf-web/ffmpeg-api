@@ -8,9 +8,13 @@ import axios from "axios";
 const app = express();
 app.use(express.json({ limit: "200mb" }));
 
-// --------------------------------------------------
-// GitHub Raw 対策（HTML/0byte/非バイナリをリトライ）
-// --------------------------------------------------
+// ------------------------------
+// Utility
+// ------------------------------
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function fetchBinaryWithRetry(url, maxRetries = 5) {
   let attempt = 0;
 
@@ -51,20 +55,27 @@ async function fetchBinaryWithRetry(url, maxRetries = 5) {
   throw new Error("Failed to fetch binary after multiple retries");
 }
 
-function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+async function downloadToBuffer(url) {
+  const res = await axios.get(url, { responseType: "arraybuffer" });
+  return Buffer.from(res.data);
 }
 
-// --------------------------------------------------
-// Health Check（Koyeb が /clip を叩かないようにする）
-// --------------------------------------------------
+async function downloadToTmp(url, filePath) {
+  const buffer = await downloadToBuffer(url);
+  fs.writeFileSync(filePath, buffer);
+  return filePath;
+}
+
+// ------------------------------
+// Health Check
+// ------------------------------
 app.get("/health", (req, res) => {
   res.status(200).send("OK");
 });
 
-// --------------------------------------------------
+// ------------------------------
 // /clip（1文クリップ生成API）
-// --------------------------------------------------
+// ------------------------------
 app.post("/clip", async (req, res) => {
   try {
     const { subtitlePng, audioUrl, backgroundVideo } = req.body;
@@ -161,31 +172,93 @@ app.post("/clip", async (req, res) => {
   }
 });
 
-// --------------------------------------------------
-// FINAL RENDER URL（フェード入り最終連結API）
-// --------------------------------------------------
-async function downloadToBuffer(url) {
-  const res = await axios.get(url, { responseType: "arraybuffer" });
-  return Buffer.from(res.data);
-}
+// ------------------------------
+// 非同期ジョブ管理
+// ------------------------------
+const jobs = {}; // jobId → { status, outputPath }
 
-async function downloadToTmp(url, filePath) {
-  const buffer = await downloadToBuffer(url);
-  fs.writeFileSync(filePath, buffer);
-  return filePath;
-}
-
+// ------------------------------
+// POST /final-render-url（非同期ジョブ登録）
+// ------------------------------
 app.post("/final-render-url", async (req, res) => {
   try {
     const clips = JSON.parse(req.body.clips.replace(/^=/, ""));
 
     if (!clips || !Array.isArray(clips)) {
-      return res.status(400).json({
-        error: "Missing or invalid clips array"
-      });
+      return res.status(400).json({ error: "Invalid clips array" });
     }
 
-    console.log("Starting FINAL RENDER (URL version)...");
+    const jobId = uuidv4();
+    jobs[jobId] = { status: "processing", outputPath: null };
+
+    console.log(`Job registered: ${jobId}`);
+
+    // 非同期で ffmpeg を実行
+    processFinalRenderJob(jobId, clips);
+
+    res.json({
+      jobId,
+      status: "processing"
+    });
+
+  } catch (err) {
+    console.error("SERVER ERROR (/final-render-url):", err);
+    res.status(500).json({ error: err.message || "Server error" });
+  }
+});
+
+// ------------------------------
+// GET /final-render-status?jobId=xxx
+// ------------------------------
+app.get("/final-render-status", (req, res) => {
+  const { jobId } = req.query;
+
+  if (!jobId || !jobs[jobId]) {
+    return res.status(404).json({ error: "Invalid jobId" });
+  }
+
+  const job = jobs[jobId];
+
+  if (job.status === "done") {
+    return res.json({
+      jobId,
+      status: "done",
+      url: `/final-result/${jobId}`
+    });
+  }
+
+  res.json({
+    jobId,
+    status: job.status
+  });
+});
+
+// ------------------------------
+// GET /final-result/:jobId（完成動画を返す）
+// ------------------------------
+app.get("/final-result/:jobId", (req, res) => {
+  const { jobId } = req.params;
+
+  if (!jobs[jobId] || jobs[jobId].status !== "done") {
+    return res.status(404).json({ error: "Not ready" });
+  }
+
+  const filePath = jobs[jobId].outputPath;
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: "File missing" });
+  }
+
+  res.setHeader("Content-Type", "video/mp4");
+  res.send(fs.readFileSync(filePath));
+});
+
+// ------------------------------
+// バックグラウンド処理
+// ------------------------------
+async function processFinalRenderJob(jobId, clips) {
+  try {
+    console.log(`Processing job: ${jobId}`);
 
     const id = uuidv4();
     const concatListPath = `/tmp/list-${id}.txt`;
@@ -270,29 +343,18 @@ app.post("/final-render-url", async (req, res) => {
         .on("error", reject);
     });
 
-    const finalBuffer = fs.readFileSync(finalOutput);
-    res.setHeader("Content-Type", "video/mp4");
-    res.send(finalBuffer);
+    jobs[jobId].status = "done";
+    jobs[jobId].outputPath = finalOutput;
 
-    fs.unlinkSync(concatListPath);
-    fs.unlinkSync(concatOutput);
-    fs.unlinkSync(finalOutput);
-
-    for (const clip of clips) {
-      const clipId = clip.clipId;
-      fs.unlinkSync(`/tmp/bg-${clipId}.mp4`);
-      fs.unlinkSync(`/tmp/audio-${clipId}.mp3`);
-      fs.unlinkSync(`/tmp/sub-${clipId}.png`);
-      fs.unlinkSync(`/tmp/clip-${clipId}.mp4`);
-    }
+    console.log(`Job completed: ${jobId}`);
 
   } catch (err) {
-    console.error("SERVER ERROR (/final-render-url):", err);
-    res.status(500).json({ error: err.message || "Server error" });
+    console.error("JOB ERROR:", err);
+    jobs[jobId].status = "error";
   }
-});
+}
 
-// --------------------------------------------------
+// ------------------------------
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
