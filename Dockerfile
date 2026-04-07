@@ -1,13 +1,13 @@
-FROM linuxserver/ffmpeg:latest as ffmpeg
-
 FROM node:18
 
-# cache-bust-9
+# cache-bust-10
+
+# ffmpeg を Debian から直接インストール
+RUN apt-get update && \
+    apt-get install -y ffmpeg && \
+    apt-get clean
 
 WORKDIR /app
-
-COPY --from=ffmpeg /usr/bin/ffmpeg /usr/local/bin/
-COPY --from=ffmpeg /usr/bin/ffprobe /usr/local/bin/
 
 COPY package*.json ./
 RUN npm install
