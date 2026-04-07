@@ -109,7 +109,6 @@ app.get("/health", (req, res) => {
 
 // ------------------------------
 // /clip（1文クリップ生成API）
-// → ffmpeg は必ずキュー経由で1つずつ実行
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -138,14 +137,9 @@ app.post("/clip", async (req, res) => {
         .replace("?ref=main", "");
     }
 
-    const bgBuffer = await fetchBinaryWithRetry(backgroundVideo);
-    fs.writeFileSync(bgPath, bgBuffer);
-
-    const audioBuffer = await fetchBinaryWithRetry(audioDownloadUrl);
-    fs.writeFileSync(audioPath, audioBuffer);
-
-    const subBuffer = await fetchBinaryWithRetry(subtitlePng);
-    fs.writeFileSync(subtitlePath, subBuffer);
+    fs.writeFileSync(bgPath, await fetchBinaryWithRetry(backgroundVideo));
+    fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrl));
+    fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitlePng));
 
     const audioDuration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(audioPath, (err, metadata) => {
@@ -154,20 +148,22 @@ app.post("/clip", async (req, res) => {
       });
     });
 
-    // ffmpeg 実行部分をキューに乗せる
     const clipBuffer = await enqueueFfmpegJob(() => {
       return new Promise((resolve, reject) => {
         ffmpeg()
-          .input(bgPath)
-          .input(audioPath)
-          .input(subtitlePath)
+          .input(bgPath)       // 0:v, 0:a
+          .input(audioPath)    // 1:a (TTS)
+          .input(subtitlePath) // 2:v
           .complexFilter([
+            // 字幕縮小
             {
               filter: "scale",
               options: { w: "iw*0.5", h: "ih*0.5" },
               inputs: "[2:v]",
               outputs: "sub_scaled",
             },
+
+            // 字幕 overlay
             {
               filter: "overlay",
               inputs: ["[0:v]", "sub_scaled"],
@@ -175,11 +171,28 @@ app.post("/clip", async (req, res) => {
                 x: "(W-w)/2",
                 y: "H-h-80",
               },
+              outputs: "video",
+            },
+
+            // 背景音声を 50%
+            {
+              filter: "volume",
+              options: "0.5",
+              inputs: "0:a",
+              outputs: "bg_low",
+            },
+
+            // TTS + 背景音声を合成（TTS優先）
+            {
+              filter: "amix",
+              options: "inputs=2:dropout_transition=0",
+              inputs: ["1:a", "bg_low"],
+              outputs: "audio_mix",
             },
           ])
           .outputOptions([
-            "-map 0:v",
-            "-map 1:a",
+            "-map [video]",
+            "-map [audio_mix]",
             "-c:v libx264",
             "-c:a aac",
             "-pix_fmt yuv420p",
@@ -194,34 +207,18 @@ app.post("/clip", async (req, res) => {
             } catch (e) {
               reject(e);
             } finally {
-              try {
-                fs.unlinkSync(bgPath);
-              } catch {}
-              try {
-                fs.unlinkSync(audioPath);
-              } catch {}
-              try {
-                fs.unlinkSync(subtitlePath);
-              } catch {}
-              try {
-                fs.unlinkSync(outputPath);
-              } catch {}
+              try { fs.unlinkSync(bgPath); } catch {}
+              try { fs.unlinkSync(audioPath); } catch {}
+              try { fs.unlinkSync(subtitlePath); } catch {}
+              try { fs.unlinkSync(outputPath); } catch {}
             }
           })
           .on("error", (err) => {
             console.error("FFMPEG ERROR (/clip):", err);
-            try {
-              fs.unlinkSync(bgPath);
-            } catch {}
-            try {
-              fs.unlinkSync(audioPath);
-            } catch {}
-            try {
-              fs.unlinkSync(subtitlePath);
-            } catch {}
-            try {
-              fs.unlinkSync(outputPath);
-            } catch {}
+            try { fs.unlinkSync(bgPath); } catch {}
+            try { fs.unlinkSync(audioPath); } catch {}
+            try { fs.unlinkSync(subtitlePath); } catch {}
+            try { fs.unlinkSync(outputPath); } catch {}
             reject(err);
           });
       });
@@ -242,8 +239,7 @@ app.post("/clip", async (req, res) => {
 const jobs = {}; // jobId → { status, outputPath }
 
 // ------------------------------
-// POST /final-render-url（非同期ジョブ登録）
-// → ffmpeg はキュー経由でバックグラウンド実行
+// POST /final-render-url
 // ------------------------------
 app.post("/final-render-url", async (req, res) => {
   try {
@@ -258,7 +254,6 @@ app.post("/final-render-url", async (req, res) => {
 
     console.log(`Job registered: ${jobId}`);
 
-    // 非同期でキューに積む（ここでは await しない）
     enqueueFfmpegJob(() => processFinalRenderJob(jobId, clips))
       .catch((err) => {
         console.error("JOB ERROR (queued):", err);
@@ -279,7 +274,7 @@ app.post("/final-render-url", async (req, res) => {
 });
 
 // ------------------------------
-// GET /final-render-status?jobId=xxx
+// GET /final-render-status
 // ------------------------------
 app.get("/final-render-status", (req, res) => {
   const { jobId } = req.query;
@@ -305,7 +300,7 @@ app.get("/final-render-status", (req, res) => {
 });
 
 // ------------------------------
-// GET /final-result/:jobId（完成動画を返す）
+// GET /final-result/:jobId
 // ------------------------------
 app.get("/final-result/:jobId", (req, res) => {
   const { jobId } = req.params;
@@ -325,8 +320,7 @@ app.get("/final-result/:jobId", (req, res) => {
 });
 
 // ------------------------------
-// バックグラウンド処理（最終レンダー）
-// ※ここ自体もキュー経由で呼ばれるので、内部の ffmpeg はそのままでOK
+// 最終レンダー処理
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
   console.log(`Processing job: ${jobId}`);
@@ -351,8 +345,6 @@ async function processFinalRenderJob(jobId, clips) {
       await downloadToTmp(clip.audioUrl, audioPath);
       await downloadToTmp(clip.subtitlePng, subtitlePath);
 
-      // 各クリップの ffmpeg も「この関数全体」がすでにキュー上なので、
-      // ここはそのまま直列で OK
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgPath)
@@ -368,28 +360,16 @@ async function processFinalRenderJob(jobId, clips) {
           ])
           .save(outPath)
           .on("end", () => {
-            try {
-              fs.unlinkSync(bgPath);
-            } catch {}
-            try {
-              fs.unlinkSync(audioPath);
-            } catch {}
-            try {
-              fs.unlinkSync(subtitlePath);
-            } catch {}
+            try { fs.unlinkSync(bgPath); } catch {}
+            try { fs.unlinkSync(audioPath); } catch {}
+            try { fs.unlinkSync(subtitlePath); } catch {}
             resolve();
           })
           .on("error", (err) => {
             console.error("FFMPEG ERROR (per-clip in final):", err);
-            try {
-              fs.unlinkSync(bgPath);
-            } catch {}
-            try {
-              fs.unlinkSync(audioPath);
-            } catch {}
-            try {
-              fs.unlinkSync(subtitlePath);
-            } catch {}
+            try { fs.unlinkSync(bgPath); } catch {}
+            try { fs.unlinkSync(audioPath); } catch {}
+            try { fs.unlinkSync(subtitlePath); } catch {}
             reject(err);
           });
       });
@@ -406,16 +386,12 @@ async function processFinalRenderJob(jobId, clips) {
         .outputOptions(["-c copy"])
         .save(concatOutput)
         .on("end", () => {
-          try {
-            fs.unlinkSync(concatListPath);
-          } catch {}
+          try { fs.unlinkSync(concatListPath); } catch {}
           resolve();
         })
         .on("error", (err) => {
           console.error("FFMPEG ERROR (concat):", err);
-          try {
-            fs.unlinkSync(concatListPath);
-          } catch {}
+          try { fs.unlinkSync(concatListPath); } catch {}
           reject(err);
         });
     });
@@ -448,16 +424,12 @@ async function processFinalRenderJob(jobId, clips) {
         ])
         .save(finalOutput)
         .on("end", () => {
-          try {
-            fs.unlinkSync(concatOutput);
-          } catch {}
+          try { fs.unlinkSync(concatOutput); } catch {}
           resolve();
         })
         .on("error", (err) => {
           console.error("FFMPEG ERROR (fade/final):", err);
-          try {
-            fs.unlinkSync(concatOutput);
-          } catch {}
+          try { fs.unlinkSync(concatOutput); } catch {}
           reject(err);
         });
     });
@@ -472,15 +444,9 @@ async function processFinalRenderJob(jobId, clips) {
     if (jobs[jobId]) {
       jobs[jobId].status = "error";
     }
-    try {
-      fs.unlinkSync(concatListPath);
-    } catch {}
-    try {
-      fs.unlinkSync(concatOutput);
-    } catch {}
-    try {
-      fs.unlinkSync(finalOutput);
-    } catch {}
+    try { fs.unlinkSync(concatListPath); } catch {}
+    try { fs.unlinkSync(concatOutput); } catch {}
+    try { fs.unlinkSync(finalOutput); } catch {}
     throw err;
   }
 }
