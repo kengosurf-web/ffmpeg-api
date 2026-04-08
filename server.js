@@ -302,7 +302,7 @@ app.get("/final-result/:jobId", (req, res) => {
 });
 
 // ------------------------------
-// 最終レンダー処理（mp4 concat 専用版）
+// 最終レンダー処理（mp4 を /tmp に保存して concat）
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
   console.log(`Processing job: ${jobId}`);
@@ -315,12 +315,16 @@ async function processFinalRenderJob(jobId, clips) {
   try {
     let concatList = "";
 
-    // ---- mp4 URL をそのまま concat ----
+    // ---- mp4 を /tmp に保存して concat ----
     for (const clip of clips) {
       if (!clip.clipUrl) {
         throw new Error("clip.clipUrl is missing");
       }
-      concatList += `file '${clip.clipUrl}'\n`;
+
+      const localPath = `/tmp/clip-${uuidv4()}.mp4`;
+      await downloadToTmp(clip.clipUrl, localPath);
+
+      concatList += `file '${localPath}'\n`;
     }
 
     fs.writeFileSync(concatListPath, concatList);
