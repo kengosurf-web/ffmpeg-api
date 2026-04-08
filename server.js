@@ -122,7 +122,6 @@ app.post("/clip", async (req, res) => {
 
     console.log("Generating 1-sentence clip...");
 
-    // A+B：絶対衝突しないユニークID
     const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
     const bgPath = `/tmp/bg-${unique}.mp4`;
@@ -130,7 +129,6 @@ app.post("/clip", async (req, res) => {
     const subtitlePath = `/tmp/sub-${unique}.png`;
     const outputPath = `/tmp/clip-${unique}.mp4`;
 
-    // GitHub URL 修正
     let audioDownloadUrl = audioUrl;
     if (audioUrl.includes("api.github.com")) {
       audioDownloadUrl = audioUrl
@@ -139,14 +137,11 @@ app.post("/clip", async (req, res) => {
         .replace("?ref=main", "");
     }
 
-    // A：ダウンロードもキューに入れて完全直列化
     const clipBuffer = await enqueueFfmpegJob(async () => {
-      // ---- ダウンロード（直列） ----
       fs.writeFileSync(bgPath, await fetchBinaryWithRetry(backgroundVideo));
       fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrl));
       fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitlePng));
 
-      // ---- 音声の長さ ----
       const audioDuration = await new Promise((resolve, reject) => {
         ffmpeg.ffprobe(audioPath, (err, metadata) => {
           if (err) reject(err);
@@ -154,21 +149,18 @@ app.post("/clip", async (req, res) => {
         });
       });
 
-      // ---- ffmpeg（直列） ----
       return new Promise((resolve, reject) => {
         ffmpeg()
-          .input(bgPath)       // 0:v
-          .input(audioPath)    // 1:a
-          .input(subtitlePath) // 2:v
+          .input(bgPath)
+          .input(audioPath)
+          .input(subtitlePath)
           .complexFilter([
-            // 字幕縮小
             {
               filter: "scale",
               options: { w: "iw*0.5", h: "ih*0.5" },
               inputs: "[2:v]",
               outputs: "sub_scaled",
             },
-            // 字幕 overlay
             {
               filter: "overlay",
               inputs: ["[0:v]", "sub_scaled"],
@@ -180,9 +172,9 @@ app.post("/clip", async (req, res) => {
             },
           ])
           .outputOptions([
-            "-an",                // 背景音声ミュート
-            "-map [video]",       // 映像
-            "-map 1:a",           // TTS 音声のみ
+            "-an",
+            "-map [video]",
+            "-map 1:a",
             "-c:v libx264",
             "-c:a aac",
             "-pix_fmt yuv420p",
@@ -223,11 +215,10 @@ app.post("/clip", async (req, res) => {
   }
 });
 
-
 // ------------------------------
 // 非同期ジョブ管理
 // ------------------------------
-const jobs = {}; // jobId → { status, outputPath }
+const jobs = {};
 
 // ------------------------------
 // POST /final-render-url
@@ -311,7 +302,7 @@ app.get("/final-result/:jobId", (req, res) => {
 });
 
 // ------------------------------
-// 最終レンダー処理
+// 最終レンダー処理（mp4 concat 専用版）
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
   console.log(`Processing job: ${jobId}`);
@@ -324,52 +315,17 @@ async function processFinalRenderJob(jobId, clips) {
   try {
     let concatList = "";
 
+    // ---- mp4 URL をそのまま concat ----
     for (const clip of clips) {
-      const clipId = clip.clipId;
-
-      const bgPath = `/tmp/bg-${clipId}.mp4`;
-      const audioPath = `/tmp/audio-${clipId}.mp3`;
-      const subtitlePath = `/tmp/sub-${clipId}.png`;
-      const outPath = `/tmp/clip-${clipId}.mp4`;
-
-      await downloadToTmp(clip.backgroundVideo, bgPath);
-      await downloadToTmp(clip.audioUrl, audioPath);
-      await downloadToTmp(clip.subtitlePng, subtitlePath);
-
-      await new Promise((resolve, reject) => {
-        ffmpeg()
-          .input(bgPath)
-          .input(audioPath)
-          .input(subtitlePath)
-          .complexFilter([
-            "[0:v][2:v] overlay=(main_w-overlay_w)/2:(main_h-overlay_h)-50",
-          ])
-          .outputOptions([
-            "-c:v libx264",
-            "-c:a aac",
-            "-pix_fmt yuv420p",
-          ])
-          .save(outPath)
-          .on("end", () => {
-            try { fs.unlinkSync(bgPath); } catch {}
-            try { fs.unlinkSync(audioPath); } catch {}
-            try { fs.unlinkSync(subtitlePath); } catch {}
-            resolve();
-          })
-          .on("error", (err) => {
-            console.error("FFMPEG ERROR (per-clip in final):", err);
-            try { fs.unlinkSync(bgPath); } catch {}
-            try { fs.unlinkSync(audioPath); } catch {}
-            try { fs.unlinkSync(subtitlePath); } catch {}
-            reject(err);
-          });
-      });
-
-      concatList += `file '${outPath}'\n`;
+      if (!clip.clipUrl) {
+        throw new Error("clip.clipUrl is missing");
+      }
+      concatList += `file '${clip.clipUrl}'\n`;
     }
 
     fs.writeFileSync(concatListPath, concatList);
 
+    // ---- concat ----
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(concatListPath)
@@ -387,6 +343,7 @@ async function processFinalRenderJob(jobId, clips) {
         });
     });
 
+    // ---- fade in/out ----
     const duration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(concatOutput, (err, metadata) => {
         if (err) reject(err);
