@@ -129,6 +129,7 @@ app.post("/clip", async (req, res) => {
     const subtitlePath = `/tmp/sub-${unique}.png`;
     const outputPath = `/tmp/clip-${unique}.mp4`;
 
+    // GitHub API URL → raw URL に変換
     let audioDownloadUrl = audioUrl;
     if (audioUrl.includes("api.github.com")) {
       audioDownloadUrl = audioUrl
@@ -142,6 +143,7 @@ app.post("/clip", async (req, res) => {
       fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrl));
       fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitlePng));
 
+      // 音声の duration を取得（クリップ長に使用）
       const audioDuration = await new Promise((resolve, reject) => {
         ffmpeg.ffprobe(audioPath, (err, metadata) => {
           if (err) reject(err);
@@ -151,16 +153,18 @@ app.post("/clip", async (req, res) => {
 
       return new Promise((resolve, reject) => {
         ffmpeg()
-          .input(bgPath)
-          .input(audioPath)
-          .input(subtitlePath)
+          .input(bgPath)        // 0: 背景動画（映像＋音声）
+          .input(audioPath)     // 1: 読み上げ音声
+          .input(subtitlePath)  // 2: 字幕PNG
           .complexFilter([
+            // 字幕を縮小
             {
               filter: "scale",
               options: { w: "iw*0.5", h: "ih*0.5" },
               inputs: "[2:v]",
               outputs: "sub_scaled",
             },
+            // 映像に字幕を重ねる
             {
               filter: "overlay",
               inputs: ["[0:v]", "sub_scaled"],
@@ -170,15 +174,21 @@ app.post("/clip", async (req, res) => {
               },
               outputs: "video",
             },
+            // 背景動画の音声を 0%（無音化）
+            {
+              filter: "volume",
+              options: "volume=0",
+              inputs: "0:a",
+              outputs: "bg_silent",
+            }
           ])
           .outputOptions([
-            "-an",
-            "-map [video]",
-            "-map 1:a",
+            "-map [video]",  // 映像
+            "-map 1:a",      // 読み上げ音声（100%）
             "-c:v libx264",
             "-c:a aac",
             "-pix_fmt yuv420p",
-            `-t ${audioDuration}`,
+            `-t ${audioDuration}`, // 音声に合わせてクリップ長を固定
             "-shortest",
           ])
           .save(outputPath)
