@@ -153,14 +153,14 @@ app.post("/clip", async (req, res) => {
         });
       });
 
-      // ---- ① クリップ生成（映像・音声は正しいが metadata が壊れる可能性あり）----
+      // ---- ① クリップ生成（強制トリムを完全撤廃）----
       await new Promise((resolve, reject) => {
         ffmpeg()
-          .input(bgPath)        // 0: 背景動画
-          .input(audioPath)     // 1: 読み上げ音声
-          .input(subtitlePath)  // 2: 字幕PNG
+          .input(bgPath)        // 背景動画
+          .input(audioPath)     // 音声
+          .input(subtitlePath)  // 字幕PNG
           .complexFilter([
-            // 字幕を縮小
+            // 字幕縮小
             {
               filter: "scale",
               options: { w: "iw*0.5", h: "ih*0.5" },
@@ -177,18 +177,11 @@ app.post("/clip", async (req, res) => {
               },
               outputs: "video_overlaid",
             },
-            // ★ 映像を音声長で強制トリム
-            {
-              filter: "trim",
-              options: { end: audioDuration },
-              inputs: "video_overlaid",
-              outputs: "video_trimmed",
-            },
-            // タイムスタンプをリセット
+            // タイムスタンプリセット（自然同期を維持）
             {
               filter: "setpts",
               options: "PTS-STARTPTS",
-              inputs: "video_trimmed",
+              inputs: "video_overlaid",
               outputs: "video_fixed",
             }
           ])
@@ -196,24 +189,23 @@ app.post("/clip", async (req, res) => {
             "-map [video_fixed]",  // 映像
             "-map 1:a",            // 音声
             "-c:v libx264",
-            "-preset ultrafast",   // ★ 追加
+            "-preset ultrafast",
             "-c:a aac",
             "-pix_fmt yuv420p",
-            `-t ${audioDuration}`, // 二重保険
-            "-shortest",
+            "-af apad=pad_dur=0.02"  // ★ 切り替わりノイズ防止（20ms無音）
           ])
           .save(outputPath)
           .on("end", resolve)
           .on("error", reject);
       });
 
-      // ---- ② 正規化ステップ（metadata 修復：根本解決）----
+      // ---- ② 正規化ステップ（metadata 修復）----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(outputPath)
           .outputOptions([
             "-c:v libx264",
-            "-preset ultrafast",   // ★ 追加
+            "-preset ultrafast",
             "-c:a aac",
             "-pix_fmt yuv420p",
             "-movflags +faststart"
@@ -244,7 +236,6 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
-
 
 // ------------------------------
 // 非同期ジョブ管理
