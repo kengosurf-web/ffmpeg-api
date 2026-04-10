@@ -173,12 +173,6 @@ app.post("/clip", async (req, res) => {
                 y: "H-h-80",
               },
               outputs: "video",
-            },
-            // 背景音声が無くても必ず動く無音ストリーム生成
-            {
-              filter: "anullsrc",
-              options: "channel_layout=stereo:sample_rate=44100",
-              outputs: "bg_silent"
             }
           ])
           .outputOptions([
