@@ -153,9 +153,9 @@ app.post("/clip", async (req, res) => {
 
       return new Promise((resolve, reject) => {
         ffmpeg()
-          .input(bgPath)        // 0: 背景動画（映像のみ or 映像＋音声）
+          .input(bgPath)        // 0: 背景動画
           .input(audioPath)     // 1: 読み上げ音声
-          .input(subtitlePath)  // 2: 字幕PNG
+          .input(subtitlePath)  // 2: 字幕PNG（無限長扱い）
           .complexFilter([
             // 字幕を縮小
             {
@@ -164,7 +164,7 @@ app.post("/clip", async (req, res) => {
               inputs: "[2:v]",
               outputs: "sub_scaled",
             },
-            // 映像に字幕を重ねる
+            // 映像に字幕を重ねる（duration=longest の影響を受ける）
             {
               filter: "overlay",
               inputs: ["[0:v]", "sub_scaled"],
@@ -173,15 +173,23 @@ app.post("/clip", async (req, res) => {
                 y: "H-h-80",
               },
               outputs: "video",
+            },
+            // ★ここが最重要★
+            // overlay の無限長をリセットし、音声と完全同期させる
+            {
+              filter: "setpts",
+              options: "PTS-STARTPTS",
+              inputs: "video",
+              outputs: "video_fixed",
             }
           ])
           .outputOptions([
-            "-map [video]",  // 映像
-            "-map 1:a",      // 読み上げ音声（100%）
+            "-map [video_fixed]",  // 映像（音声に同期済み）
+            "-map 1:a",            // 読み上げ音声
             "-c:v libx264",
             "-c:a aac",
             "-pix_fmt yuv420p",
-            `-t ${audioDuration}`, // 音声に合わせてクリップ長を固定
+            `-t ${audioDuration}`, // ★音声の長さに強制固定★
             "-shortest",
           ])
           .save(outputPath)
