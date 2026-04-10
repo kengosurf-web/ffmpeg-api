@@ -161,35 +161,41 @@ app.post("/clip", async (req, res) => {
             {
               filter: "scale",
               options: { w: "iw*0.5", h: "ih*0.5" },
-              inputs: "[2:v]",
+              inputs: "2:v",
               outputs: "sub_scaled",
             },
-            // 映像に字幕を重ねる（duration=longest の影響を受ける）
+            // 背景 + 字幕
             {
               filter: "overlay",
-              inputs: ["[0:v]", "sub_scaled"],
+              inputs: ["0:v", "sub_scaled"],
               options: {
                 x: "(W-w)/2",
                 y: "H-h-80",
               },
-              outputs: "video",
+              outputs: "video_overlaid",
             },
-            // ★ここが最重要★
-            // overlay の無限長をリセットし、音声と完全同期させる
+            // ★ 映像を音声長で強制トリム（最重要）
+            {
+              filter: "trim",
+              options: { end: audioDuration },
+              inputs: "video_overlaid",
+              outputs: "video_trimmed",
+            },
+            // タイムスタンプをリセット
             {
               filter: "setpts",
               options: "PTS-STARTPTS",
-              inputs: "video",
+              inputs: "video_trimmed",
               outputs: "video_fixed",
             }
           ])
           .outputOptions([
-            "-map [video_fixed]",  // 映像（音声に同期済み）
+            "-map [video_fixed]",  // 映像（音声長に完全同期）
             "-map 1:a",            // 読み上げ音声
             "-c:v libx264",
             "-c:a aac",
             "-pix_fmt yuv420p",
-            `-t ${audioDuration}`, // ★音声の長さに強制固定★
+            `-t ${audioDuration}`, // 二重保険：出力全体を音声長に固定
             "-shortest",
           ])
           .save(outputPath)
@@ -225,6 +231,7 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
+
 
 // ------------------------------
 // 非同期ジョブ管理
