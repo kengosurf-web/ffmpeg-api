@@ -196,6 +196,7 @@ app.post("/clip", async (req, res) => {
             "-map [video_fixed]",  // 映像
             "-map 1:a",            // 音声
             "-c:v libx264",
+            "-preset ultrafast",   // ★ 追加
             "-c:a aac",
             "-pix_fmt yuv420p",
             `-t ${audioDuration}`, // 二重保険
@@ -212,6 +213,7 @@ app.post("/clip", async (req, res) => {
           .input(outputPath)
           .outputOptions([
             "-c:v libx264",
+            "-preset ultrafast",   // ★ 追加
             "-c:a aac",
             "-pix_fmt yuv420p",
             "-movflags +faststart"
@@ -242,6 +244,7 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
+
 
 // ------------------------------
 // 非同期ジョブ管理
