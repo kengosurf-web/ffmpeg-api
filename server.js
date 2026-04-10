@@ -203,23 +203,29 @@ app.post("/clip", async (req, res) => {
               outputs: "video_fixed",
             },
 
-            // 音声側も最終的に PTS を揃える（念のため）
+            // 音声側も最終的に PTS を揃える
             {
               filter: "asetpts",
               options: "PTS-STARTPTS",
               inputs: "audio_reset",
               outputs: "audio_fixed",
+            },
+
+            // ★ apad を complexFilter 内に統合（エラー解消）
+            {
+              filter: "apad",
+              options: "pad_dur=0.02",
+              inputs: "audio_fixed",
+              outputs: "audio_padded",
             }
           ])
           .outputOptions([
             "-map [video_fixed]",  // 映像
-            "-map [audio_fixed]",  // 音声
+            "-map [audio_padded]", // 音声（無音追加済み）
             "-c:v libx264",
             "-preset ultrafast",
             "-c:a aac",
-            "-pix_fmt yuv420p",
-            // 切り替わりノイズ防止（20ms 無音）
-            "-af apad=pad_dur=0.02"
+            "-pix_fmt yuv420p"
           ])
           .save(outputPath)
           .on("end", resolve)
@@ -263,7 +269,6 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
-
 
 // ------------------------------
 // 非同期ジョブ管理
