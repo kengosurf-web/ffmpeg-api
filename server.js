@@ -153,13 +153,21 @@ app.post("/clip", async (req, res) => {
         });
       });
 
-      // ---- ① クリップ生成（強制トリムを完全撤廃）----
+      // ---- ① クリップ生成（背景ズレ完全解消版）----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgPath)        // 背景動画
           .input(audioPath)     // 音声
           .input(subtitlePath)  // 字幕PNG
           .complexFilter([
+            // 背景動画の PTS を完全リセット（最重要）
+            {
+              filter: "setpts",
+              options: "PTS-STARTPTS",
+              inputs: "0:v",
+              outputs: "bg_reset",
+            },
+
             // 字幕縮小
             {
               filter: "scale",
@@ -167,17 +175,19 @@ app.post("/clip", async (req, res) => {
               inputs: "2:v",
               outputs: "sub_scaled",
             },
+
             // 背景 + 字幕
             {
               filter: "overlay",
-              inputs: ["0:v", "sub_scaled"],
+              inputs: ["bg_reset", "sub_scaled"],
               options: {
                 x: "(W-w)/2",
                 y: "H-h-80",
               },
               outputs: "video_overlaid",
             },
-            // タイムスタンプリセット（自然同期を維持）
+
+            // 全体の PTS をリセット（自然同期を維持）
             {
               filter: "setpts",
               options: "PTS-STARTPTS",
@@ -236,6 +246,7 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
+
 
 // ------------------------------
 // 非同期ジョブ管理
