@@ -128,6 +128,7 @@ app.post("/clip", async (req, res) => {
     const audioPath = `/tmp/audio-${unique}.mp3`;
     const subtitlePath = `/tmp/sub-${unique}.png`;
     const outputPath = `/tmp/clip-${unique}.mp4`;
+    const normalizedPath = `/tmp/clip-normalized-${unique}.mp4`;
 
     // GitHub API URL → raw URL に変換
     let audioDownloadUrl = audioUrl;
@@ -139,11 +140,12 @@ app.post("/clip", async (req, res) => {
     }
 
     const clipBuffer = await enqueueFfmpegJob(async () => {
+      // ---- ダウンロード ----
       fs.writeFileSync(bgPath, await fetchBinaryWithRetry(backgroundVideo));
       fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrl));
       fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitlePng));
 
-      // 音声の duration を取得（クリップ長に使用）
+      // ---- 音声の duration を取得 ----
       const audioDuration = await new Promise((resolve, reject) => {
         ffmpeg.ffprobe(audioPath, (err, metadata) => {
           if (err) reject(err);
@@ -151,11 +153,12 @@ app.post("/clip", async (req, res) => {
         });
       });
 
-      return new Promise((resolve, reject) => {
+      // ---- ① クリップ生成（映像・音声は正しいが metadata が壊れる可能性あり）----
+      await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgPath)        // 0: 背景動画
           .input(audioPath)     // 1: 読み上げ音声
-          .input(subtitlePath)  // 2: 字幕PNG（無限長扱い）
+          .input(subtitlePath)  // 2: 字幕PNG
           .complexFilter([
             // 字幕を縮小
             {
@@ -174,7 +177,7 @@ app.post("/clip", async (req, res) => {
               },
               outputs: "video_overlaid",
             },
-            // ★ 映像を音声長で強制トリム（最重要）
+            // ★ 映像を音声長で強制トリム
             {
               filter: "trim",
               options: { end: audioDuration },
@@ -190,37 +193,45 @@ app.post("/clip", async (req, res) => {
             }
           ])
           .outputOptions([
-            "-map [video_fixed]",  // 映像（音声長に完全同期）
-            "-map 1:a",            // 読み上げ音声
+            "-map [video_fixed]",  // 映像
+            "-map 1:a",            // 音声
             "-c:v libx264",
             "-c:a aac",
             "-pix_fmt yuv420p",
-            `-t ${audioDuration}`, // 二重保険：出力全体を音声長に固定
+            `-t ${audioDuration}`, // 二重保険
             "-shortest",
           ])
           .save(outputPath)
-          .on("end", () => {
-            try {
-              const file = fs.readFileSync(outputPath);
-              resolve(file);
-            } catch (e) {
-              reject(e);
-            } finally {
-              try { fs.unlinkSync(bgPath); } catch {}
-              try { fs.unlinkSync(audioPath); } catch {}
-              try { fs.unlinkSync(subtitlePath); } catch {}
-              try { fs.unlinkSync(outputPath); } catch {}
-            }
-          })
-          .on("error", (err) => {
-            console.error("FFMPEG ERROR (/clip):", err);
-            try { fs.unlinkSync(bgPath); } catch {}
-            try { fs.unlinkSync(audioPath); } catch {}
-            try { fs.unlinkSync(subtitlePath); } catch {}
-            try { fs.unlinkSync(outputPath); } catch {}
-            reject(err);
-          });
+          .on("end", resolve)
+          .on("error", reject);
       });
+
+      // ---- ② 正規化ステップ（metadata 修復：根本解決）----
+      await new Promise((resolve, reject) => {
+        ffmpeg()
+          .input(outputPath)
+          .outputOptions([
+            "-c:v libx264",
+            "-c:a aac",
+            "-pix_fmt yuv420p",
+            "-movflags +faststart"
+          ])
+          .save(normalizedPath)
+          .on("end", resolve)
+          .on("error", reject);
+      });
+
+      // ---- 正規化済みファイルを返す ----
+      const file = fs.readFileSync(normalizedPath);
+
+      // ---- 後片付け ----
+      try { fs.unlinkSync(bgPath); } catch {}
+      try { fs.unlinkSync(audioPath); } catch {}
+      try { fs.unlinkSync(subtitlePath); } catch {}
+      try { fs.unlinkSync(outputPath); } catch {}
+      try { fs.unlinkSync(normalizedPath); } catch {}
+
+      return file;
     });
 
     res.setHeader("Content-Type", "video/mp4");
@@ -231,7 +242,6 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
-
 
 // ------------------------------
 // 非同期ジョブ管理
