@@ -448,21 +448,60 @@ app.post('/bgm-mix', async (req, res) => {
     const outputPath = `/tmp/${jobId}.mp4`;
     const trimmedBgmPath = `/tmp/${jobId}-bgm.mp3`;
 
-    // 1. Final video duration
-    const durationCmd = `ffprobe -v error -show_entries format=duration -of csv=p=0 "${finalVideoUrl}"`;
-    const videoDuration = parseFloat(execSync(durationCmd).toString().trim());
+    // ------------------------------
+    // 1. Final video duration (非同期 ffprobe)
+    // ------------------------------
+    const videoDuration = await new Promise((resolve, reject) => {
+      ffmpeg.ffprobe(finalVideoUrl, (err, metadata) => {
+        if (err) reject(err);
+        else resolve(metadata.format.duration);
+      });
+    });
 
-    // 2. Trim BGM to match video duration
-    const trimCmd = `ffmpeg -y -i "${bgmUrl}" -t ${videoDuration} -filter:a "volume=0.25" "${trimmedBgmPath}"`;
-    execSync(trimCmd);
+    // ------------------------------
+    // 2. Trim BGM to match video duration (非同期 ffmpeg)
+    // ------------------------------
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(bgmUrl)
+        .audioFilters(`volume=0.25`)
+        .setDuration(videoDuration)
+        .output(trimmedBgmPath)
+        .on("end", resolve)
+        .on("error", reject)
+        .run();
+    });
 
-    // 3. Mix BGM + Final video
-    const mixCmd = `ffmpeg -y -i "${finalVideoUrl}" -i "${trimmedBgmPath}" \
-      -filter_complex "amix=inputs=2:duration=first:dropout_transition=0" \
-      -c:v copy -c:a aac "${outputPath}"`;
-    execSync(mixCmd);
+    // ------------------------------
+    // 3. Mix BGM + Final video (非同期 ffmpeg)
+    // ------------------------------
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(finalVideoUrl)
+        .input(trimmedBgmPath)
+        .complexFilter([
+          {
+            filter: "amix",
+            options: {
+              inputs: 2,
+              duration: "first",
+              dropout_transition: 0
+            }
+          }
+        ])
+        .outputOptions([
+          "-c:v copy",
+          "-c:a aac",
+          "-preset ultrafast"   // ★ 高速化
+        ])
+        .save(outputPath)
+        .on("end", resolve)
+        .on("error", reject);
+    });
 
+    // ------------------------------
     // 4. Save result to public folder
+    // ------------------------------
     const publicPath = path.join(__dirname, "public", "final-result", `${jobId}.mp4`);
     fs.copyFileSync(outputPath, publicPath);
 
