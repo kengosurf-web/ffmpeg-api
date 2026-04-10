@@ -153,7 +153,7 @@ app.post("/clip", async (req, res) => {
 
       return new Promise((resolve, reject) => {
         ffmpeg()
-          .input(bgPath)        // 0: 背景動画（映像＋音声）
+          .input(bgPath)        // 0: 背景動画（映像のみ or 映像＋音声）
           .input(audioPath)     // 1: 読み上げ音声
           .input(subtitlePath)  // 2: 字幕PNG
           .complexFilter([
@@ -174,12 +174,11 @@ app.post("/clip", async (req, res) => {
               },
               outputs: "video",
             },
-            // 背景動画の音声を 0%（無音化）
+            // 背景音声が無くても必ず動く無音ストリーム生成
             {
-              filter: "volume",
-              options: "volume=0",
-              inputs: "0:a",
-              outputs: "bg_silent",
+              filter: "anullsrc",
+              options: "channel_layout=stereo:sample_rate=44100",
+              outputs: "bg_silent"
             }
           ])
           .outputOptions([
