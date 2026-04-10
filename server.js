@@ -108,7 +108,7 @@ app.get("/health", (req, res) => {
 });
 
 // ------------------------------
-// /clip（1文クリップ生成API）
+// /clip（1文クリップ生成API）完全同期版
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -120,7 +120,7 @@ app.post("/clip", async (req, res) => {
       });
     }
 
-    console.log("Generating 1-sentence clip...");
+    console.log("Generating 1-sentence clip (perfect sync version)...");
 
     const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
@@ -145,7 +145,7 @@ app.post("/clip", async (req, res) => {
       fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrl));
       fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitlePng));
 
-      // ---- 音声の duration を取得 ----
+      // ---- 音声の duration を取得（絶対基準）----
       const audioDuration = await new Promise((resolve, reject) => {
         ffmpeg.ffprobe(audioPath, (err, metadata) => {
           if (err) reject(err);
@@ -153,19 +153,27 @@ app.post("/clip", async (req, res) => {
         });
       });
 
-      // ---- ① クリップ生成（背景ズレ完全解消版）----
+      // ---- ① クリップ生成（音声と背景の“最初の一致”を保証）----
       await new Promise((resolve, reject) => {
         ffmpeg()
-          .input(bgPath)        // 背景動画
-          .input(audioPath)     // 音声
-          .input(subtitlePath)  // 字幕PNG
+          .input(bgPath)        // 0:v 背景動画
+          .input(audioPath)     // 1:a 音声
+          .input(subtitlePath)  // 2:v 字幕PNG
           .complexFilter([
-            // 背景動画の PTS を完全リセット（最重要）
+            // 背景の PTS を完全リセット（内部時間を 0 からにする）
             {
               filter: "setpts",
               options: "PTS-STARTPTS",
               inputs: "0:v",
               outputs: "bg_reset",
+            },
+
+            // 音声の PTS も完全リセット（内部時間を 0 からにする）
+            {
+              filter: "asetpts",
+              options: "PTS-STARTPTS",
+              inputs: "1:a",
+              outputs: "audio_reset",
             },
 
             // 字幕縮小
@@ -176,7 +184,7 @@ app.post("/clip", async (req, res) => {
               outputs: "sub_scaled",
             },
 
-            // 背景 + 字幕
+            // 背景 + 字幕（映像合成）
             {
               filter: "overlay",
               inputs: ["bg_reset", "sub_scaled"],
@@ -187,22 +195,31 @@ app.post("/clip", async (req, res) => {
               outputs: "video_overlaid",
             },
 
-            // 全体の PTS をリセット（自然同期を維持）
+            // 映像全体の PTS をリセット（映像の時間軸を 0 からに揃える）
             {
               filter: "setpts",
               options: "PTS-STARTPTS",
               inputs: "video_overlaid",
               outputs: "video_fixed",
+            },
+
+            // 音声側も最終的に PTS を揃える（念のため）
+            {
+              filter: "asetpts",
+              options: "PTS-STARTPTS",
+              inputs: "audio_reset",
+              outputs: "audio_fixed",
             }
           ])
           .outputOptions([
             "-map [video_fixed]",  // 映像
-            "-map 1:a",            // 音声
+            "-map [audio_fixed]",  // 音声
             "-c:v libx264",
             "-preset ultrafast",
             "-c:a aac",
             "-pix_fmt yuv420p",
-            "-af apad=pad_dur=0.02"  // ★ 切り替わりノイズ防止（20ms無音）
+            // 切り替わりノイズ防止（20ms 無音）
+            "-af apad=pad_dur=0.02"
           ])
           .save(outputPath)
           .on("end", resolve)
