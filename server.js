@@ -422,6 +422,53 @@ async function processFinalRenderJob(jobId, clips) {
 }
 
 // ------------------------------
+// /bgm-mix
+// ------------------------------
+app.post('/bgm-mix', async (req, res) => {
+  try {
+    const { finalVideoUrl, bgmUrl } = req.body;
+    if (!finalVideoUrl || !bgmUrl) {
+      return res.status(400).json({ error: "finalVideoUrl and bgmUrl are required" });
+    }
+
+    const jobId = uuidv4();
+    const outputPath = `/tmp/${jobId}.mp4`;
+    const trimmedBgmPath = `/tmp/${jobId}-bgm.mp3`;
+
+    // 1. Final video duration
+    const durationCmd = `ffprobe -v error -show_entries format=duration -of csv=p=0 "${finalVideoUrl}"`;
+    const videoDuration = parseFloat(execSync(durationCmd).toString().trim());
+
+    // 2. Trim BGM to match video duration
+    const trimCmd = `ffmpeg -y -i "${bgmUrl}" -t ${videoDuration} -filter:a "volume=0.25" "${trimmedBgmPath}"`;
+    execSync(trimCmd);
+
+    // 3. Mix BGM + Final video
+    const mixCmd = `ffmpeg -y -i "${finalVideoUrl}" -i "${trimmedBgmPath}" \
+      -filter_complex "amix=inputs=2:duration=first:dropout_transition=0" \
+      -c:v copy -c:a aac "${outputPath}"`;
+    execSync(mixCmd);
+
+    // 4. Save result to public folder
+    const publicPath = path.join(__dirname, "public", "final-result", `${jobId}.mp4`);
+    fs.copyFileSync(outputPath, publicPath);
+
+    const resultUrl = `/final-result/${jobId}`;
+
+    res.json({
+      jobId,
+      status: "done",
+      url: resultUrl
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "BGM mix failed", details: err.message });
+  }
+});
+
+
+// ------------------------------
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
