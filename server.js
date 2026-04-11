@@ -462,36 +462,48 @@ async function processFinalRenderJob(jobId, clips) {
 }
 
 // ------------------------------
-// /bgm-mix
+// /bgm-mix（完全修正版）
 // ------------------------------
 app.post('/bgm-mix', async (req, res) => {
   try {
+    const path = require("path");   // ★ 必須（今回のエラー原因）
     const { finalVideoUrl, bgmUrl } = req.body;
+
     if (!finalVideoUrl || !bgmUrl) {
       return res.status(400).json({ error: "finalVideoUrl and bgmUrl are required" });
     }
 
     const jobId = uuidv4();
-    const outputPath = `/tmp/${jobId}.mp4`;
-    const trimmedBgmPath = `/tmp/${jobId}-bgm.mp3`;
+
+    // 一時ファイル
+    const localVideoPath = `/tmp/video-${jobId}.mp4`;
+    const localBgmPath = `/tmp/bgm-${jobId}.mp3`;
+    const trimmedBgmPath = `/tmp/bgm-trimmed-${jobId}.mp3`;
+    const outputPath = `/tmp/output-${jobId}.mp4`;
 
     // ------------------------------
-    // 1. Final video duration (非同期 ffprobe)
+    // 0. まず動画とBGMを /tmp に保存（ffmpeg/ffprobe 安定化）
+    // ------------------------------
+    await downloadToTmp(finalVideoUrl, localVideoPath);
+    await downloadToTmp(bgmUrl, localBgmPath);
+
+    // ------------------------------
+    // 1. Final video duration（ffprobe は URL ではなくローカルで）
     // ------------------------------
     const videoDuration = await new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(finalVideoUrl, (err, metadata) => {
+      ffmpeg.ffprobe(localVideoPath, (err, metadata) => {
         if (err) reject(err);
         else resolve(metadata.format.duration);
       });
     });
 
     // ------------------------------
-    // 2. Trim BGM to match video duration (非同期 ffmpeg)
+    // 2. Trim BGM to match video duration
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
-        .input(bgmUrl)
-        .audioFilters(`volume=0.25`)
+        .input(localBgmPath)
+        .audioFilters("volume=0.25")
         .setDuration(videoDuration)
         .output(trimmedBgmPath)
         .on("end", resolve)
@@ -500,11 +512,11 @@ app.post('/bgm-mix', async (req, res) => {
     });
 
     // ------------------------------
-    // 3. Mix BGM + Final video (非同期 ffmpeg)
+    // 3. Mix BGM + Final video
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
-        .input(finalVideoUrl)
+        .input(localVideoPath)
         .input(trimmedBgmPath)
         .complexFilter([
           {
@@ -519,7 +531,7 @@ app.post('/bgm-mix', async (req, res) => {
         .outputOptions([
           "-c:v copy",
           "-c:a aac",
-          "-preset ultrafast"   // ★ 高速化
+          "-preset ultrafast"
         ])
         .save(outputPath)
         .on("end", resolve)
@@ -532,12 +544,21 @@ app.post('/bgm-mix', async (req, res) => {
     const publicPath = path.join(__dirname, "public", "final-result", `${jobId}.mp4`);
     fs.copyFileSync(outputPath, publicPath);
 
-    const resultUrl = `/final-result/${jobId}`;
+    // ------------------------------
+    // 5. Cleanup
+    // ------------------------------
+    try { fs.unlinkSync(localVideoPath); } catch {}
+    try { fs.unlinkSync(localBgmPath); } catch {}
+    try { fs.unlinkSync(trimmedBgmPath); } catch {}
+    try { fs.unlinkSync(outputPath); } catch {}
 
+    // ------------------------------
+    // 6. Response
+    // ------------------------------
     res.json({
       jobId,
       status: "done",
-      url: resultUrl
+      url: `/final-result/${jobId}`
     });
 
   } catch (err) {
@@ -545,7 +566,6 @@ app.post('/bgm-mix', async (req, res) => {
     res.status(500).json({ error: "BGM mix failed", details: err.message });
   }
 });
-
 
 // ------------------------------
 const PORT = process.env.PORT || 8000;
