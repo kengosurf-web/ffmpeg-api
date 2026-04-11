@@ -356,8 +356,13 @@ app.get("/final-result/:jobId", (req, res) => {
     return res.status(404).json({ error: "File missing" });
   }
 
+  // ★★★ path が必要なので import した上で sendFile に変更 ★★★
+  const stat = fs.statSync(filePath);
   res.setHeader("Content-Type", "video/mp4");
-  res.send(fs.readFileSync(filePath));
+  res.setHeader("Content-Length", stat.size);
+  res.setHeader("Accept-Ranges", "bytes");
+
+  res.sendFile(filePath);
 });
 
 // ------------------------------
@@ -425,12 +430,12 @@ async function processFinalRenderJob(jobId, clips) {
       ffmpeg()
         .input(concatOutput)
         .videoFilters([
-          "setpts=PTS-STARTPTS",  // ★ PTS リセット
+          "setpts=PTS-STARTPTS",
           `fade=t=in:st=0:d=${fadeInSec}`,
           `fade=t=out:st=${fadeOutStart}:d=${fadeOutSec}`,
         ])
         .audioFilters([
-          "asetpts=PTS-STARTPTS", // ★ PTS リセット
+          "asetpts=PTS-STARTPTS",
           `afade=t=in:st=0:d=${fadeInSec}`,
           `afade=t=out:st=${fadeOutStart}:d=${fadeOutSec}`,
         ])
@@ -466,7 +471,7 @@ async function processFinalRenderJob(jobId, clips) {
     try { fs.unlinkSync(finalOutput); } catch {}
     throw err;
   }
-}
+});
 
 
 // ------------------------------
