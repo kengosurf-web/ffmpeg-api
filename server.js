@@ -469,12 +469,14 @@ async function processFinalRenderJob(jobId, clips) {
 }
 
 
+// ESM 環境では require が使えないため import を使用
+import path from "path";
+
 // ------------------------------
-// /bgm-mix（完全修正版）
+// /bgm-mix（完全修正版 / ESM対応）
 // ------------------------------
 app.post('/bgm-mix', async (req, res) => {
   try {
-    const path = require("path");   // ★ 必須（今回のエラー原因）
     const { finalVideoUrl, bgmUrl } = req.body;
 
     if (!finalVideoUrl || !bgmUrl) {
@@ -549,7 +551,12 @@ app.post('/bgm-mix', async (req, res) => {
     // ------------------------------
     // 4. Save result to public folder
     // ------------------------------
-    const publicPath = path.join(__dirname, "public", "final-result", `${jobId}.mp4`);
+    const publicPath = path.join(
+      __dirname,
+      "public",
+      "final-result",
+      `${jobId}.mp4`
+    );
     fs.copyFileSync(outputPath, publicPath);
 
     // ------------------------------
@@ -574,6 +581,7 @@ app.post('/bgm-mix', async (req, res) => {
     res.status(500).json({ error: "BGM mix failed", details: err.message });
   }
 });
+
 
 
 // ------------------------------
