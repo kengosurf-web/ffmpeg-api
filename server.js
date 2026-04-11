@@ -406,7 +406,7 @@ async function processFinalRenderJob(jobId, clips) {
         });
     });
 
-    // ---- fade in/out ----
+    // ---- duration を取得 ----
     const duration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(concatOutput, (err, metadata) => {
         if (err) reject(err);
@@ -417,16 +417,22 @@ async function processFinalRenderJob(jobId, clips) {
     const fadeInSec = 0.8;
     const fadeOutSec = 0.8;
 
+    // ★ fade-out の開始位置を安全化（負値防止）
+    const fadeOutStart = Math.max(duration - fadeOutSec, 0);
+
+    // ---- fade + PTS リセット ----
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(concatOutput)
         .videoFilters([
+          "setpts=PTS-STARTPTS",  // ★ PTS リセット
           `fade=t=in:st=0:d=${fadeInSec}`,
-          `fade=t=out:st=${duration - fadeOutSec}:d=${fadeOutSec}`,
+          `fade=t=out:st=${fadeOutStart}:d=${fadeOutSec}`,
         ])
         .audioFilters([
+          "asetpts=PTS-STARTPTS", // ★ PTS リセット
           `afade=t=in:st=0:d=${fadeInSec}`,
-          `afade=t=out:st=${duration - fadeOutSec}:d=${fadeOutSec}`,
+          `afade=t=out:st=${fadeOutStart}:d=${fadeOutSec}`,
         ])
         .outputOptions([
           "-c:v libx264",
@@ -461,6 +467,7 @@ async function processFinalRenderJob(jobId, clips) {
     throw err;
   }
 }
+
 
 // ------------------------------
 // /bgm-mix（完全修正版）
