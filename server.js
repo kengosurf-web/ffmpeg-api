@@ -1,10 +1,20 @@
+// ------------------------------
+// Imports & ESM __dirname
+// ------------------------------
 import express from "express";
 import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
 import { v4 as uuidv4 } from "uuid";
 import fetch from "node-fetch";
-import axios from "axios";
+import path from "path";
+import { fileURLToPath } from "url";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ------------------------------
+// Express app
+// ------------------------------
 const app = express();
 app.use(express.json({ limit: "200mb" }));
 
@@ -55,15 +65,32 @@ async function fetchBinaryWithRetry(url, maxRetries = 5) {
   throw new Error("Failed to fetch binary after multiple retries");
 }
 
-async function downloadToBuffer(url) {
-  const res = await axios.get(url, { responseType: "arraybuffer" });
-  return Buffer.from(res.data);
-}
+// ------------------------------
+// downloadToTmp（Jamendo / Koyeb 対応版）
+// ------------------------------
+async function downloadToTmp(url, destPath) {
+  console.log("Downloading:", url);
 
-async function downloadToTmp(url, filePath) {
-  const buffer = await downloadToBuffer(url);
-  fs.writeFileSync(filePath, buffer);
-  return filePath;
+  const response = await fetch(url, {
+    method: "GET",
+    redirect: "follow",
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      "Accept": "*/*",
+    },
+  });
+
+  console.log("Status:", response.status);
+
+  if (!response.ok) {
+    throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  console.log("Downloaded bytes:", buffer.length);
+
+  fs.writeFileSync(destPath, buffer);
+  console.log("Saved to:", destPath);
 }
 
 // ------------------------------
@@ -108,7 +135,7 @@ app.get("/health", (req, res) => {
 });
 
 // ------------------------------
-// /clip（1文クリップ生成API）完全同期版（音声長で背景を利用し、音声長で切る）
+// /clip（1文クリップ生成API）完全同期版
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -145,7 +172,7 @@ app.post("/clip", async (req, res) => {
       fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrl));
       fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitlePng));
 
-      // ---- 音声の duration を取得（絶対基準）----
+      // ---- 音声の duration を取得 ----
       const audioDuration = await new Promise((resolve, reject) => {
         ffmpeg.ffprobe(audioPath, (err, metadata) => {
           if (err) reject(err);
@@ -153,38 +180,31 @@ app.post("/clip", async (req, res) => {
         });
       });
 
-      // ---- ① クリップ生成（音声長で背景を利用し、音声長で切る）----
+      // ---- ① クリップ生成 ----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgPath)        // 0:v 背景動画
           .input(audioPath)     // 1:a 音声
           .input(subtitlePath)  // 2:v 字幕PNG
           .complexFilter([
-            // 背景の PTS を完全リセット
             {
               filter: "setpts",
               options: "PTS-STARTPTS",
               inputs: "0:v",
               outputs: "bg_reset",
             },
-
-            // 音声の PTS を完全リセット
             {
               filter: "asetpts",
               options: "PTS-STARTPTS",
               inputs: "1:a",
               outputs: "audio_reset",
             },
-
-            // 字幕縮小
             {
               filter: "scale",
               options: { w: "iw*0.5", h: "ih*0.5" },
               inputs: "2:v",
               outputs: "sub_scaled",
             },
-
-            // 背景 + 字幕（映像合成）
             {
               filter: "overlay",
               inputs: ["bg_reset", "sub_scaled"],
@@ -194,30 +214,24 @@ app.post("/clip", async (req, res) => {
               },
               outputs: "video_overlaid",
             },
-
-            // 映像全体の PTS をリセット
             {
               filter: "setpts",
               options: "PTS-STARTPTS",
               inputs: "video_overlaid",
               outputs: "video_fixed",
             },
-
-            // 音声側も最終的に PTS を揃える
             {
               filter: "asetpts",
               options: "PTS-STARTPTS",
               inputs: "audio_reset",
               outputs: "audio_fixed",
             },
-
-            // apad（無音追加）
             {
               filter: "apad",
               options: "pad_dur=0.02",
               inputs: "audio_fixed",
               outputs: "audio_padded",
-            }
+            },
           ])
           .outputOptions([
             "-map [video_fixed]",
@@ -226,16 +240,14 @@ app.post("/clip", async (req, res) => {
             "-preset ultrafast",
             "-c:a aac",
             "-pix_fmt yuv420p",
-
-            // ★ ここが重要：音声長で背景を切る
-            `-t ${audioDuration}`
+            `-t ${audioDuration}`,
           ])
           .save(outputPath)
           .on("end", resolve)
           .on("error", reject);
       });
 
-      // ---- ② 正規化ステップ（metadata 修復）----
+      // ---- ② 正規化ステップ ----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(outputPath)
@@ -244,17 +256,15 @@ app.post("/clip", async (req, res) => {
             "-preset ultrafast",
             "-c:a aac",
             "-pix_fmt yuv420p",
-            "-movflags +faststart"
+            "-movflags +faststart",
           ])
           .save(normalizedPath)
           .on("end", resolve)
           .on("error", reject);
       });
 
-      // ---- 正規化済みファイルを返す ----
       const file = fs.readFileSync(normalizedPath);
 
-      // ---- 後片付け ----
       try { fs.unlinkSync(bgPath); } catch {}
       try { fs.unlinkSync(audioPath); } catch {}
       try { fs.unlinkSync(subtitlePath); } catch {}
@@ -272,7 +282,6 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
-
 
 // ------------------------------
 // 非同期ジョブ管理
@@ -356,7 +365,6 @@ app.get("/final-result/:jobId", (req, res) => {
     return res.status(404).json({ error: "File missing" });
   }
 
-  // ★★★ path が必要なので import した上で sendFile に変更 ★★★
   const stat = fs.statSync(filePath);
   res.setHeader("Content-Type", "video/mp4");
   res.setHeader("Content-Length", stat.size);
@@ -379,7 +387,6 @@ async function processFinalRenderJob(jobId, clips) {
   try {
     let concatList = "";
 
-    // ---- mp4 を /tmp に保存して concat ----
     for (const clip of clips) {
       if (!clip.clipUrl) {
         throw new Error("clip.clipUrl is missing");
@@ -393,7 +400,6 @@ async function processFinalRenderJob(jobId, clips) {
 
     fs.writeFileSync(concatListPath, concatList);
 
-    // ---- concat ----
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(concatListPath)
@@ -411,7 +417,6 @@ async function processFinalRenderJob(jobId, clips) {
         });
     });
 
-    // ---- duration を取得 ----
     const duration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(concatOutput, (err, metadata) => {
         if (err) reject(err);
@@ -421,11 +426,8 @@ async function processFinalRenderJob(jobId, clips) {
 
     const fadeInSec = 0.8;
     const fadeOutSec = 0.8;
-
-    // ★ fade-out の開始位置を安全化（負値防止）
     const fadeOutStart = Math.max(duration - fadeOutSec, 0);
 
-    // ---- fade + PTS リセット ----
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(concatOutput)
@@ -471,47 +473,6 @@ async function processFinalRenderJob(jobId, clips) {
     try { fs.unlinkSync(finalOutput); } catch {}
     throw err;
   }
-});
-
-
-// ------------------------------
-// ESM 用 __dirname 再現
-// ------------------------------
-import path from "path";
-import { fileURLToPath } from "url";
-import fs from "fs";
-import ffmpeg from "fluent-ffmpeg";
-import fetch from "node-fetch";   // ★★★ 必須 ★★★
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// ------------------------------
-// downloadToTmp（Jamendo / Koyeb 完全対応版）
-// ------------------------------
-async function downloadToTmp(url, destPath) {
-  console.log("Downloading:", url);
-
-  const response = await fetch(url, {
-    method: "GET",                 // ★ HEAD を禁止（Jamendo/Koyeb 対策）
-    redirect: "follow",            // ★ 302/301 を追跡
-    headers: {
-      "User-Agent": "Mozilla/5.0", // ★ Jamendo 対策（UA 必須）
-      "Accept": "*/*"
-    }
-  });
-
-  console.log("Status:", response.status);
-
-  if (!response.ok) {
-    throw new Error(`Download failed: ${response.status} ${response.statusText}`);
-  }
-
-  const buffer = Buffer.from(await response.arrayBuffer());
-  console.log("Downloaded bytes:", buffer.length);
-
-  fs.writeFileSync(destPath, buffer);
-  console.log("Saved to:", destPath);
 }
 
 // ------------------------------
@@ -594,7 +555,6 @@ app.post('/bgm-mix', async (req, res) => {
     // 4. Save result to public folder
     // ------------------------------
     const resultDir = path.join(__dirname, "public", "final-result");
-
     fs.mkdirSync(resultDir, { recursive: true });
 
     const publicPath = path.join(resultDir, `${jobId}.mp4`);
@@ -627,6 +587,7 @@ app.post('/bgm-mix', async (req, res) => {
 // PORT
 // ------------------------------
 const PORT = process.env.PORT || 8000;
+
 app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
 });
