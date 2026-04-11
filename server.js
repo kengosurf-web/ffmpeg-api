@@ -108,7 +108,7 @@ app.get("/health", (req, res) => {
 });
 
 // ------------------------------
-// /clip（1文クリップ生成API）完全同期版
+// /clip（1文クリップ生成API）完全同期版（音声長で背景を利用し、音声長で切る）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -153,14 +153,14 @@ app.post("/clip", async (req, res) => {
         });
       });
 
-      // ---- ① クリップ生成（音声と背景の“最初の一致”を保証）----
+      // ---- ① クリップ生成（音声長で背景を利用し、音声長で切る）----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgPath)        // 0:v 背景動画
           .input(audioPath)     // 1:a 音声
           .input(subtitlePath)  // 2:v 字幕PNG
           .complexFilter([
-            // 背景の PTS を完全リセット（内部時間を 0 からにする）
+            // 背景の PTS を完全リセット
             {
               filter: "setpts",
               options: "PTS-STARTPTS",
@@ -168,7 +168,7 @@ app.post("/clip", async (req, res) => {
               outputs: "bg_reset",
             },
 
-            // 音声の PTS も完全リセット（内部時間を 0 からにする）
+            // 音声の PTS を完全リセット
             {
               filter: "asetpts",
               options: "PTS-STARTPTS",
@@ -195,7 +195,7 @@ app.post("/clip", async (req, res) => {
               outputs: "video_overlaid",
             },
 
-            // 映像全体の PTS をリセット（映像の時間軸を 0 からに揃える）
+            // 映像全体の PTS をリセット
             {
               filter: "setpts",
               options: "PTS-STARTPTS",
@@ -211,7 +211,7 @@ app.post("/clip", async (req, res) => {
               outputs: "audio_fixed",
             },
 
-            // ★ apad を complexFilter 内に統合（エラー解消）
+            // apad（無音追加）
             {
               filter: "apad",
               options: "pad_dur=0.02",
@@ -220,12 +220,15 @@ app.post("/clip", async (req, res) => {
             }
           ])
           .outputOptions([
-            "-map [video_fixed]",  // 映像
-            "-map [audio_padded]", // 音声（無音追加済み）
+            "-map [video_fixed]",
+            "-map [audio_padded]",
             "-c:v libx264",
             "-preset ultrafast",
             "-c:a aac",
-            "-pix_fmt yuv420p"
+            "-pix_fmt yuv420p",
+
+            // ★ ここが重要：音声長で背景を切る
+            `-t ${audioDuration}`
           ])
           .save(outputPath)
           .on("end", resolve)
