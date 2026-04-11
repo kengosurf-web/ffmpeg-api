@@ -284,11 +284,6 @@ app.post("/clip", async (req, res) => {
 });
 
 // ------------------------------
-// 非同期ジョブ管理
-// ------------------------------
-const jobs = {};
-
-// ------------------------------
 // POST /final-render-url
 // ------------------------------
 app.post("/final-render-url", async (req, res) => {
@@ -302,11 +297,11 @@ app.post("/final-render-url", async (req, res) => {
     const jobId = uuidv4();
     jobs[jobId] = { status: "processing", outputPath: null };
 
-    console.log(`Job registered: ${jobId}`);
+    console.log(`Final render job registered: ${jobId}`);
 
     enqueueFfmpegJob(() => processFinalRenderJob(jobId, clips))
       .catch((err) => {
-        console.error("JOB ERROR (queued):", err);
+        console.error("FINAL RENDER JOB ERROR (queued):", err);
         if (jobs[jobId]) {
           jobs[jobId].status = "error";
         }
@@ -327,6 +322,67 @@ app.post("/final-render-url", async (req, res) => {
 // GET /final-render-status
 // ------------------------------
 app.get("/final-render-status", (req, res) => {
+  const { jobId } = req.query;
+
+  if (!jobId || !jobs[jobId]) {
+    return res.status(404).json({ error: "Invalid jobId" });
+  }
+
+  const job = jobs[jobId];
+
+  if (job.status === "done") {
+    return res.json({
+      jobId,
+      status: "done",
+      url: `/final-result/${jobId}`,
+    });
+  }
+
+  res.json({
+    jobId,
+    status: job.status,
+  });
+});
+
+// ------------------------------
+// POST /bgm-mix
+// ------------------------------
+app.post("/bgm-mix", async (req, res) => {
+  try {
+    const { finalVideoUrl, bgmUrl } = req.body;
+
+    if (!finalVideoUrl || !bgmUrl) {
+      return res.status(400).json({ error: "finalVideoUrl and bgmUrl are required" });
+    }
+
+    const jobId = uuidv4();
+    jobs[jobId] = { status: "processing", outputPath: null };
+
+    console.log(`BGM mix job registered: ${jobId}`);
+
+    enqueueFfmpegJob(() => processBgmMixJob(jobId, finalVideoUrl, bgmUrl))
+      .catch((err) => {
+        console.error("BGM MIX JOB ERROR (queued):", err);
+        if (jobs[jobId]) {
+          jobs[jobId].status = "error";
+        }
+      });
+
+    res.json({
+      jobId,
+      status: "processing",
+    });
+
+  } catch (err) {
+    console.error("SERVER ERROR (/bgm-mix):", err);
+    res.status(500).json({ error: err.message || "Server error" });
+  }
+});
+
+// ------------------------------
+// GET /bgm-mix-status
+// ------------------------------
+app.get("/bgm-mix-status", (req, res) => {
   const { jobId } = req.query;
 
   if (!jobId || !jobs[jobId]) {
@@ -377,7 +433,7 @@ app.get("/final-result/:jobId", (req, res) => {
 // 最終レンダー処理（背景 duration 基準）
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
-  console.log(`Processing job: ${jobId}`);
+  console.log(`Processing final render job: ${jobId}`);
 
   const id = uuidv4();
   const concatListPath = `/tmp/list-${id}.txt`;
@@ -463,16 +519,73 @@ async function processFinalRenderJob(jobId, clips) {
     jobs[jobId].status = "done";
     jobs[jobId].outputPath = finalOutput;
 
-    console.log(`Job completed: ${jobId}`);
+    console.log(`Final render job completed: ${jobId}`);
 
   } catch (err) {
-    console.error("JOB ERROR:", err);
+    console.error("FINAL RENDER JOB ERROR:", err);
     if (jobs[jobId]) {
       jobs[jobId].status = "error";
     }
     try { fs.unlinkSync(concatListPath); } catch {}
     try { fs.unlinkSync(concatOutput); } catch {}
     try { fs.unlinkSync(finalOutput); } catch {}
+    throw err;
+  }
+}
+
+// ------------------------------
+// BGM ミックス処理
+// ------------------------------
+async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
+  console.log(`Processing BGM mix job: ${jobId}`);
+
+  const id = uuidv4();
+  const videoPath = `/tmp/video-${id}.mp4`;
+  const bgmPath = `/tmp/bgm-${id}.mp3`;
+  const outputPath = `/tmp/bgm-final-${id}.mp4`;
+
+  try {
+    await downloadToTmp(finalVideoUrl, videoPath);
+    await downloadToTmp(bgmUrl, bgmPath);
+
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(videoPath)
+        .input(bgmPath)
+        .complexFilter([
+          // 0:a = 元の音声, 1:a = BGM
+          // 必要なら volume 調整はここで
+          "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[aout]"
+        ])
+        .outputOptions([
+          "-map 0:v",
+          "-map [aout]",
+          "-c:v copy",
+          "-c:a aac",
+        ])
+        .save(outputPath)
+        .on("end", () => {
+          resolve();
+        })
+        .on("error", (err) => {
+          console.error("FFMPEG ERROR (bgm mix):", err);
+          reject(err);
+        });
+    });
+
+    jobs[jobId].status = "done";
+    jobs[jobId].outputPath = outputPath;
+
+    console.log(`BGM mix job completed: ${jobId}`);
+
+  } catch (err) {
+    console.error("BGM MIX JOB ERROR:", err);
+    if (jobs[jobId]) {
+      jobs[jobId].status = "error";
+    }
+    try { fs.unlinkSync(videoPath); } catch {}
+    try { fs.unlinkSync(bgmPath); } catch {}
+    try { fs.unlinkSync(outputPath); } catch {}
     throw err;
   }
 }
