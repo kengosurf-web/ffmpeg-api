@@ -469,14 +469,47 @@ async function processFinalRenderJob(jobId, clips) {
 }
 
 // ------------------------------
-// /bgm-mix（完全修正版 / ESM対応）
+// ESM 用 __dirname 再現
 // ------------------------------
 import path from "path";
 import { fileURLToPath } from "url";
+import fs from "fs";
+import ffmpeg from "fluent-ffmpeg";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// ------------------------------
+// downloadToTmp（Jamendo / Koyeb 完全対応版）
+// ------------------------------
+async function downloadToTmp(url, destPath) {
+  console.log("Downloading:", url);
+
+  const response = await fetch(url, {
+    method: "GET",                 // ★ HEAD を禁止（Jamendo/Koyeb 対策）
+    redirect: "follow",            // ★ 302/301 を追跡
+    headers: {
+      "User-Agent": "Mozilla/5.0", // ★ Jamendo 対策（UA 必須）
+      "Accept": "*/*"
+    }
+  });
+
+  console.log("Status:", response.status);
+
+  if (!response.ok) {
+    throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  console.log("Downloaded bytes:", buffer.length);
+
+  fs.writeFileSync(destPath, buffer);
+  console.log("Saved to:", destPath);
+}
+
+// ------------------------------
+// /bgm-mix（完全修正版 / ESM対応）
+// ------------------------------
 app.post('/bgm-mix', async (req, res) => {
   try {
     const { finalVideoUrl, bgmUrl } = req.body;
@@ -555,7 +588,6 @@ app.post('/bgm-mix', async (req, res) => {
     // ------------------------------
     const resultDir = path.join(__dirname, "public", "final-result");
 
-    // ★ フォルダを必ず作る（今回のエラーの原因）
     fs.mkdirSync(resultDir, { recursive: true });
 
     const publicPath = path.join(resultDir, `${jobId}.mp4`);
