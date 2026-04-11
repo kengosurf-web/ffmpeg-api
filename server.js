@@ -468,10 +468,6 @@ async function processFinalRenderJob(jobId, clips) {
   }
 }
 
-
-// ESM 環境では require が使えないため import を使用
-import path from "path";
-
 // ------------------------------
 // /bgm-mix（完全修正版 / ESM対応）
 // ------------------------------
@@ -581,7 +577,6 @@ app.post('/bgm-mix', async (req, res) => {
     res.status(500).json({ error: "BGM mix failed", details: err.message });
   }
 });
-
 
 
 // ------------------------------
