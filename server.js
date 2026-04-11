@@ -307,15 +307,10 @@ app.post("/final-render-url", async (req, res) => {
     enqueueFfmpegJob(() => processFinalRenderJob(jobId, clips))
       .catch((err) => {
         console.error("FINAL RENDER JOB ERROR (queued):", err);
-        if (jobs[jobId]) {
-          jobs[jobId].status = "error";
-        }
+        if (jobs[jobId]) jobs[jobId].status = "error";
       });
 
-    res.json({
-      jobId,
-      status: "processing",
-    });
+    res.json({ jobId, status: "processing" });
 
   } catch (err) {
     console.error("SERVER ERROR (/final-render-url):", err);
@@ -343,14 +338,11 @@ app.get("/final-render-status", (req, res) => {
     });
   }
 
-  res.json({
-    jobId,
-    status: job.status,
-  });
+  res.json({ jobId, status: job.status });
 });
 
 // ------------------------------
-// POST /bgm-mix
+// POST /bgm-mix（正しい実装）
 // ------------------------------
 app.post("/bgm-mix", async (req, res) => {
   try {
@@ -368,15 +360,10 @@ app.post("/bgm-mix", async (req, res) => {
     enqueueFfmpegJob(() => processBgmMixJob(jobId, finalVideoUrl, bgmUrl))
       .catch((err) => {
         console.error("BGM MIX JOB ERROR (queued):", err);
-        if (jobs[jobId]) {
-          jobs[jobId].status = "error";
-        }
+        if (jobs[jobId]) jobs[jobId].status = "error";
       });
 
-    res.json({
-      jobId,
-      status: "processing",
-    });
+    res.json({ jobId, status: "processing" });
 
   } catch (err) {
     console.error("SERVER ERROR (/bgm-mix):", err);
@@ -404,10 +391,7 @@ app.get("/bgm-mix-status", (req, res) => {
     });
   }
 
-  res.json({
-    jobId,
-    status: job.status,
-  });
+  res.json({ jobId, status: job.status });
 });
 
 // ------------------------------
@@ -435,7 +419,7 @@ app.get("/final-result/:jobId", (req, res) => {
 });
 
 // ------------------------------
-// 最終レンダー処理（背景 duration 基準）
+// 最終レンダー処理
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
   console.log(`Processing final render job: ${jobId}`);
@@ -450,10 +434,6 @@ async function processFinalRenderJob(jobId, clips) {
     let totalDuration = 0;
 
     for (const clip of clips) {
-      if (!clip.clipUrl) {
-        throw new Error("clip.clipUrl is missing");
-      }
-
       const localPath = `/tmp/clip-${uuidv4()}.mp4`;
       await downloadToTmp(clip.clipUrl, localPath);
 
@@ -476,15 +456,8 @@ async function processFinalRenderJob(jobId, clips) {
         .inputOptions(["-f concat", "-safe 0"])
         .outputOptions(["-c copy"])
         .save(concatOutput)
-        .on("end", () => {
-          try { fs.unlinkSync(concatListPath); } catch {}
-          resolve();
-        })
-        .on("error", (err) => {
-          console.error("FFMPEG ERROR (concat):", err);
-          try { fs.unlinkSync(concatListPath); } catch {}
-          reject(err);
-        });
+        .on("end", () => resolve())
+        .on("error", reject);
     });
 
     const fadeInSec = 0.8;
@@ -504,21 +477,10 @@ async function processFinalRenderJob(jobId, clips) {
           `afade=t=in:st=0:d=${fadeInSec}`,
           `afade=t=out:st=${fadeOutStart}:d=${fadeOutSec}`,
         ])
-        .outputOptions([
-          "-c:v libx264",
-          "-c:a aac",
-          "-pix_fmt yuv420p",
-        ])
+        .outputOptions(["-c:v libx264", "-c:a aac", "-pix_fmt yuv420p"])
         .save(finalOutput)
-        .on("end", () => {
-          try { fs.unlinkSync(concatOutput); } catch {}
-          resolve();
-        })
-        .on("error", (err) => {
-          console.error("FFMPEG ERROR (fade/final):", err);
-          try { fs.unlinkSync(concatOutput); } catch {}
-          reject(err);
-        });
+        .on("end", resolve)
+        .on("error", reject);
     });
 
     jobs[jobId].status = "done";
@@ -528,18 +490,13 @@ async function processFinalRenderJob(jobId, clips) {
 
   } catch (err) {
     console.error("FINAL RENDER JOB ERROR:", err);
-    if (jobs[jobId]) {
-      jobs[jobId].status = "error";
-    }
-    try { fs.unlinkSync(concatListPath); } catch {}
-    try { fs.unlinkSync(concatOutput); } catch {}
-    try { fs.unlinkSync(finalOutput); } catch {}
+    jobs[jobId].status = "error";
     throw err;
   }
 }
 
 // ------------------------------
-// BGM ミックス処理
+// BGM ミックス処理（正しい実装）
 // ------------------------------
 async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
   console.log(`Processing BGM mix job: ${jobId}`);
@@ -558,24 +515,12 @@ async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
         .input(videoPath)
         .input(bgmPath)
         .complexFilter([
-          // 0:a = 元の音声, 1:a = BGM
-          // 必要なら volume 調整はここで
           "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[aout]"
         ])
-        .outputOptions([
-          "-map 0:v",
-          "-map [aout]",
-          "-c:v copy",
-          "-c:a aac",
-        ])
+        .outputOptions(["-map 0:v", "-map [aout]", "-c:v copy", "-c:a aac"])
         .save(outputPath)
-        .on("end", () => {
-          resolve();
-        })
-        .on("error", (err) => {
-          console.error("FFMPEG ERROR (bgm mix):", err);
-          reject(err);
-        });
+        .on("end", resolve)
+        .on("error", reject);
     });
 
     jobs[jobId].status = "done";
@@ -585,130 +530,15 @@ async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
 
   } catch (err) {
     console.error("BGM MIX JOB ERROR:", err);
-    if (jobs[jobId]) {
-      jobs[jobId].status = "error";
-    }
-    try { fs.unlinkSync(videoPath); } catch {}
-    try { fs.unlinkSync(bgmPath); } catch {}
-    try { fs.unlinkSync(outputPath); } catch {}
+    jobs[jobId].status = "error";
     throw err;
   }
 }
-
-
-// ------------------------------
-// /bgm-mix（完全修正版 / ESM対応）
-// ------------------------------
-app.post('/bgm-mix', async (req, res) => {
-  try {
-    const { finalVideoUrl, bgmUrl } = req.body;
-
-    if (!finalVideoUrl || !bgmUrl) {
-      return res.status(400).json({ error: "finalVideoUrl and bgmUrl are required" });
-    }
-
-    const jobId = uuidv4();
-
-    // 一時ファイル
-    const localVideoPath = `/tmp/video-${jobId}.mp4`;
-    const localBgmPath = `/tmp/bgm-${jobId}.mp3`;
-    const trimmedBgmPath = `/tmp/bgm-trimmed-${jobId}.mp3`;
-    const outputPath = `/tmp/output-${jobId}.mp4`;
-
-    // ------------------------------
-    // 0. 動画とBGMを /tmp に保存
-    // ------------------------------
-    await downloadToTmp(finalVideoUrl, localVideoPath);
-    await downloadToTmp(bgmUrl, localBgmPath);
-
-    // ------------------------------
-    // 1. Final video duration
-    // ------------------------------
-    const videoDuration = await new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(localVideoPath, (err, metadata) => {
-        if (err) reject(err);
-        else resolve(metadata.format.duration);
-      });
-    });
-
-    // ------------------------------
-    // 2. Trim BGM
-    // ------------------------------
-    await new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(localBgmPath)
-        .audioFilters("volume=0.25")
-        .setDuration(videoDuration)
-        .output(trimmedBgmPath)
-        .on("end", resolve)
-        .on("error", reject)
-        .run();
-    });
-
-    // ------------------------------
-    // 3. Mix BGM + Final video
-    // ------------------------------
-    await new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(localVideoPath)
-        .input(trimmedBgmPath)
-        .complexFilter([
-          {
-            filter: "amix",
-            options: {
-              inputs: 2,
-              duration: "first",
-              dropout_transition: 0
-            }
-          }
-        ])
-        .outputOptions([
-          "-c:v copy",
-          "-c:a aac",
-          "-preset ultrafast"
-        ])
-        .save(outputPath)
-        .on("end", resolve)
-        .on("error", reject);
-    });
-
-    // ------------------------------
-    // 4. Save result to public folder
-    // ------------------------------
-    const resultDir = path.join(__dirname, "public", "final-result");
-    fs.mkdirSync(resultDir, { recursive: true });
-
-    const publicPath = path.join(resultDir, `${jobId}.mp4`);
-    fs.copyFileSync(outputPath, publicPath);
-
-    // ------------------------------
-    // 5. Cleanup
-    // ------------------------------
-    try { fs.unlinkSync(localVideoPath); } catch {}
-    try { fs.unlinkSync(localBgmPath); } catch {}
-    try { fs.unlinkSync(trimmedBgmPath); } catch {}
-    try { fs.unlinkSync(outputPath); } catch {}
-
-    // ------------------------------
-    // 6. Response
-    // ------------------------------
-    res.json({
-      jobId,
-      status: "done",
-      url: `/final-result/${jobId}`
-    });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "BGM mix failed", details: err.message });
-  }
-});
 
 // ------------------------------
 // PORT
 // ------------------------------
 const PORT = process.env.PORT || 8000;
-
 app.listen(PORT, () => {
   console.log(`API running on port ${PORT}`);
 });
