@@ -134,8 +134,15 @@ app.get("/health", (req, res) => {
   res.status(200).send("OK");
 });
 
+
+
 // ------------------------------
-// /clip（1文クリップ生成API）完全同期版
+// 非同期ジョブ管理
+// ------------------------------
+const jobs = {};
+
+// ------------------------------
+// /clip（1文クリップ生成API）完全同期版（キャッシュバスター付き）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -147,7 +154,7 @@ app.post("/clip", async (req, res) => {
       });
     }
 
-    console.log("Generating 1-sentence clip (perfect sync version)...");
+    console.log("Generating 1-sentence clip (perfect sync version, cache-busted)...");
 
     const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
@@ -166,10 +173,15 @@ app.post("/clip", async (req, res) => {
         .replace("?ref=main", "");
     }
 
+    // キャッシュバスター付与（GitHub Raw / CDN 対策）
+    const cacheBust = `?v=${Date.now()}`;
+    const bgDownloadUrl = backgroundVideo + cacheBust;
+    const audioDownloadUrlWithBust = audioDownloadUrl + cacheBust;
+
     const clipBuffer = await enqueueFfmpegJob(async () => {
-      // ---- ダウンロード ----
-      fs.writeFileSync(bgPath, await fetchBinaryWithRetry(backgroundVideo));
-      fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrl));
+      // ---- ダウンロード（キャッシュバスター付きURLを使用）----
+      fs.writeFileSync(bgPath, await fetchBinaryWithRetry(bgDownloadUrl));
+      fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrlWithBust));
       fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitlePng));
 
       // ---- 音声の duration を取得 ----
@@ -283,10 +295,6 @@ app.post("/clip", async (req, res) => {
   }
 });
 
-// ------------------------------
-// 非同期ジョブ管理
-// ------------------------------
-const jobs = {};
 
 // ------------------------------
 // POST /final-render-url
@@ -419,7 +427,7 @@ app.get("/final-result/:jobId", (req, res) => {
 });
 
 // ------------------------------
-// 最終レンダー処理
+// 最終レンダー処理（キャッシュバスター付き）
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
   console.log(`Processing final render job: ${jobId}`);
@@ -433,9 +441,16 @@ async function processFinalRenderJob(jobId, clips) {
     let concatList = "";
     let totalDuration = 0;
 
+    // キャッシュバスター（GitHub Raw / CDN 対策）
+    const cacheBust = `?v=${Date.now()}`;
+
     for (const clip of clips) {
       const localPath = `/tmp/clip-${uuidv4()}.mp4`;
-      await downloadToTmp(clip.clipUrl, localPath);
+
+      // ここで各クリップURLにキャッシュバスターを付与
+      const clipDownloadUrl = clip.clipUrl + cacheBust;
+
+      await downloadToTmp(clipDownloadUrl, localPath);
 
       const videoDuration = await new Promise((resolve, reject) => {
         ffmpeg.ffprobe(localPath, (err, metadata) => {
@@ -494,6 +509,7 @@ async function processFinalRenderJob(jobId, clips) {
     throw err;
   }
 }
+
 
 // ------------------------------
 // BGM ミックス処理（正しい実装）
