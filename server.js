@@ -374,7 +374,7 @@ app.get("/final-result/:jobId", (req, res) => {
 });
 
 // ------------------------------
-// 最終レンダー処理（mp4 を /tmp に保存して concat）
+// 最終レンダー処理（背景 duration 基準）
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
   console.log(`Processing job: ${jobId}`);
@@ -386,6 +386,7 @@ async function processFinalRenderJob(jobId, clips) {
 
   try {
     let concatList = "";
+    let totalDuration = 0;
 
     for (const clip of clips) {
       if (!clip.clipUrl) {
@@ -395,6 +396,14 @@ async function processFinalRenderJob(jobId, clips) {
       const localPath = `/tmp/clip-${uuidv4()}.mp4`;
       await downloadToTmp(clip.clipUrl, localPath);
 
+      const videoDuration = await new Promise((resolve, reject) => {
+        ffmpeg.ffprobe(localPath, (err, metadata) => {
+          if (err) reject(err);
+          else resolve(metadata.format.duration);
+        });
+      });
+
+      totalDuration += videoDuration;
       concatList += `file '${localPath}'\n`;
     }
 
@@ -417,16 +426,9 @@ async function processFinalRenderJob(jobId, clips) {
         });
     });
 
-    const duration = await new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(concatOutput, (err, metadata) => {
-        if (err) reject(err);
-        else resolve(metadata.format.duration);
-      });
-    });
-
     const fadeInSec = 0.8;
     const fadeOutSec = 0.8;
-    const fadeOutStart = Math.max(duration - fadeOutSec, 0);
+    const fadeOutStart = Math.max(totalDuration - fadeOutSec, 0);
 
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -474,6 +476,7 @@ async function processFinalRenderJob(jobId, clips) {
     throw err;
   }
 }
+
 
 // ------------------------------
 // /bgm-mix（完全修正版 / ESM対応）
