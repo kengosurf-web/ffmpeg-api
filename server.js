@@ -469,7 +469,7 @@ async function processFinalRenderJob(jobId, clips) {
 }
 
 // ------------------------------
-// ESM 用 __dirname 再現
+// /bgm-mix（完全修正版 / ESM対応）
 // ------------------------------
 import path from "path";
 import { fileURLToPath } from "url";
@@ -477,9 +477,6 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ------------------------------
-// /bgm-mix（完全修正版 / ESM対応）
-// ------------------------------
 app.post('/bgm-mix', async (req, res) => {
   try {
     const { finalVideoUrl, bgmUrl } = req.body;
@@ -556,13 +553,12 @@ app.post('/bgm-mix', async (req, res) => {
     // ------------------------------
     // 4. Save result to public folder
     // ------------------------------
-    const publicPath = path.join(
-      __dirname,
-      "public",
-      "final-result",
-      `${jobId}.mp4`
-    );
+    const resultDir = path.join(__dirname, "public", "final-result");
 
+    // ★ フォルダを必ず作る（今回のエラーの原因）
+    fs.mkdirSync(resultDir, { recursive: true });
+
+    const publicPath = path.join(resultDir, `${jobId}.mp4`);
     fs.copyFileSync(outputPath, publicPath);
 
     // ------------------------------
