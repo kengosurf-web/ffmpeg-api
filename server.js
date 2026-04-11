@@ -468,6 +468,7 @@ async function processFinalRenderJob(jobId, clips) {
   }
 }
 
+
 // ------------------------------
 // ESM 用 __dirname 再現
 // ------------------------------
@@ -475,6 +476,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import ffmpeg from "fluent-ffmpeg";
+import fetch from "node-fetch";   // ★★★ 必須 ★★★
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -615,7 +617,6 @@ app.post('/bgm-mix', async (req, res) => {
     res.status(500).json({ error: "BGM mix failed", details: err.message });
   }
 });
-
 
 // ------------------------------
 // PORT
