@@ -482,7 +482,7 @@ app.post('/bgm-mix', async (req, res) => {
     const outputPath = `/tmp/output-${jobId}.mp4`;
 
     // ------------------------------
-    // 0. まず動画とBGMを /tmp に保存（ffmpeg/ffprobe 安定化）
+    // 0. 動画とBGMを /tmp に保存（ffmpeg/ffprobe 安定化）
     // ------------------------------
     await downloadToTmp(finalVideoUrl, localVideoPath);
     await downloadToTmp(bgmUrl, localBgmPath);
@@ -567,6 +567,9 @@ app.post('/bgm-mix', async (req, res) => {
   }
 });
 
+
+// ------------------------------
+// PORT
 // ------------------------------
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => {
