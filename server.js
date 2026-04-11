@@ -469,6 +469,15 @@ async function processFinalRenderJob(jobId, clips) {
 }
 
 // ------------------------------
+// ESM 用 __dirname 再現
+// ------------------------------
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ------------------------------
 // /bgm-mix（完全修正版 / ESM対応）
 // ------------------------------
 app.post('/bgm-mix', async (req, res) => {
@@ -488,13 +497,13 @@ app.post('/bgm-mix', async (req, res) => {
     const outputPath = `/tmp/output-${jobId}.mp4`;
 
     // ------------------------------
-    // 0. 動画とBGMを /tmp に保存（ffmpeg/ffprobe 安定化）
+    // 0. 動画とBGMを /tmp に保存
     // ------------------------------
     await downloadToTmp(finalVideoUrl, localVideoPath);
     await downloadToTmp(bgmUrl, localBgmPath);
 
     // ------------------------------
-    // 1. Final video duration（ffprobe は URL ではなくローカルで）
+    // 1. Final video duration
     // ------------------------------
     const videoDuration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(localVideoPath, (err, metadata) => {
@@ -504,7 +513,7 @@ app.post('/bgm-mix', async (req, res) => {
     });
 
     // ------------------------------
-    // 2. Trim BGM to match video duration
+    // 2. Trim BGM
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -553,6 +562,7 @@ app.post('/bgm-mix', async (req, res) => {
       "final-result",
       `${jobId}.mp4`
     );
+
     fs.copyFileSync(outputPath, publicPath);
 
     // ------------------------------
