@@ -331,7 +331,6 @@ app.post("/clip", async (req, res) => {
   }
 });
 
-
 // ------------------------------
 // POST /final-render-url
 // ------------------------------
@@ -344,14 +343,17 @@ app.post("/final-render-url", async (req, res) => {
     }
 
     const jobId = uuidv4();
-    jobs[jobId] = { status: "processing", outputPath: null };
+    jobs[jobId] = { status: "processing", outputPath: null, errorMessage: null };
 
     console.log(`Final render job registered: ${jobId}`);
 
     enqueueFfmpegJob(() => processFinalRenderJob(jobId, clips))
       .catch((err) => {
         console.error("FINAL RENDER JOB ERROR (queued):", err);
-        if (jobs[jobId]) jobs[jobId].status = "error";
+        if (jobs[jobId]) {
+          jobs[jobId].status = "error";
+          jobs[jobId].errorMessage = err.message || String(err);
+        }
       });
 
     res.json({ jobId, status: "processing" });
@@ -374,6 +376,14 @@ app.get("/final-render-status", (req, res) => {
 
   const job = jobs[jobId];
 
+  if (job.status === "error") {
+    return res.json({
+      jobId,
+      status: "error",
+      errorMessage: job.errorMessage || "Unknown error"
+    });
+  }
+
   if (job.status === "done") {
     return res.json({
       jobId,
@@ -386,7 +396,7 @@ app.get("/final-render-status", (req, res) => {
 });
 
 // ------------------------------
-// POST /bgm-mix（正しい実装）
+// POST /bgm-mix
 // ------------------------------
 app.post("/bgm-mix", async (req, res) => {
   try {
@@ -397,14 +407,17 @@ app.post("/bgm-mix", async (req, res) => {
     }
 
     const jobId = uuidv4();
-    jobs[jobId] = { status: "processing", outputPath: null };
+    jobs[jobId] = { status: "processing", outputPath: null, errorMessage: null };
 
     console.log(`BGM mix job registered: ${jobId}`);
 
     enqueueFfmpegJob(() => processBgmMixJob(jobId, finalVideoUrl, bgmUrl))
       .catch((err) => {
         console.error("BGM MIX JOB ERROR (queued):", err);
-        if (jobs[jobId]) jobs[jobId].status = "error";
+        if (jobs[jobId]) {
+          jobs[jobId].status = "error";
+          jobs[jobId].errorMessage = err.message || String(err);
+        }
       });
 
     res.json({ jobId, status: "processing" });
@@ -426,6 +439,14 @@ app.get("/bgm-mix-status", (req, res) => {
   }
 
   const job = jobs[jobId];
+
+  if (job.status === "error") {
+    return res.json({
+      jobId,
+      status: "error",
+      errorMessage: job.errorMessage || "Unknown error"
+    });
+  }
 
   if (job.status === "done") {
     return res.json({
