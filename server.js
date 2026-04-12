@@ -463,7 +463,7 @@ app.get("/final-result/:jobId", (req, res) => {
 });
 
 // ------------------------------
-// 最終レンダー（ロングエスト基準 / concat filter）
+// 最終レンダー（ロングエスト基準 / concat filter / ffprobeでストリーム番号取得）
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
   console.log(`Processing final render job (longest-PTS mode): ${jobId}`);
@@ -475,27 +475,43 @@ async function processFinalRenderJob(jobId, clips) {
   try {
     const cacheBust = `?v=${Date.now()}`;
 
-    let index = 0;
     for (const clip of clips) {
       const localPath = `/tmp/clip-${uuidv4()}.mp4`;
       const clipDownloadUrl = clip.clipUrl + cacheBust;
 
+      // クリップをダウンロード
       await downloadToTmp(clipDownloadUrl, localPath);
+
+      // ★ ffprobe でストリーム番号を取得
+      const probe = await new Promise((resolve, reject) => {
+        ffmpeg.ffprobe(localPath, (err, data) => {
+          if (err) reject(err);
+          else resolve(data);
+        });
+      });
+
+      const videoStream = probe.streams.find(s => s.codec_type === "video");
+      const audioStream = probe.streams.find(s => s.codec_type === "audio");
+
+      if (!videoStream) {
+        throw new Error(`Video stream missing in clip: ${clip.clipUrl}`);
+      }
+      if (!audioStream) {
+        throw new Error(`Audio stream missing in clip: ${clip.clipUrl}`);
+      }
 
       filterList.push({
         path: localPath,
-        label: `v${index}`,
-        alabel: `a${index}`,
+        v: videoStream.index, // ★ 動的に取得した映像ストリーム番号
+        a: audioStream.index  // ★ 動的に取得した音声ストリーム番号
       });
-
-      index++;
     }
 
     // ffmpeg filter_complex の入力を構築
     const ff = ffmpeg();
     filterList.forEach((c) => ff.input(c.path));
 
-    // ★ filterComplex を完全1行にする（最重要）
+    // ★ filterComplex を完全1行で生成（改行禁止）
     const filterComplex =
       filterList.map((c, i) => `[${i}:v][${i}:a]`).join("") +
       `concat=n=${filterList.length}:v=1:a=1[v][a]`;
@@ -506,7 +522,7 @@ async function processFinalRenderJob(jobId, clips) {
         .outputOptions([
           "-map [v]",
           "-map [a]",
-          "-c:v libx264",
+          "-c:v libx264",        // concat filter は copy 不可
           "-preset veryfast",
           "-c:a aac",
           "-movflags +faststart"
@@ -527,7 +543,6 @@ async function processFinalRenderJob(jobId, clips) {
     throw err;
   }
 }
-
 
 // ------------------------------
 // BGM ミックス処理（音量調整 + フェードアウト付き）
