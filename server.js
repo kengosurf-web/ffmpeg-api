@@ -142,7 +142,7 @@ app.get("/health", (req, res) => {
 const jobs = {};
 
 // ------------------------------
-// /clip（1文クリップ生成API）完全同期版（scale削除 + 字幕中央配置 + 正規化あり）
+// /clip（1文クリップ生成API）完全同期版（背景をBに強制）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -154,17 +154,22 @@ app.post("/clip", async (req, res) => {
       });
     }
 
-    console.log("Generating 1-sentence clip (perfect sync, normalized, no-scale, centered subtitles)...");
+    console.log("Generating 1-sentence clip (perfect sync, force-B background)...");
 
     const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
     const bgPath = `/tmp/bg-${unique}.mp4`;
+    const bgTrimmedA = `/tmp/bgA-${unique}.mp4`;
+    const bgTrimmedB = `/tmp/bgB-${unique}.mp4`;
+
     const audioPath = `/tmp/audio-${unique}.mp3`;
     const subtitlePath = `/tmp/sub-${unique}.png`;
-    const outputPath = `/tmp/clip-${unique}.mp4`;
-    const normalizedPath = `/tmp/clip-normalized-${unique}.mp4`;
 
-    // GitHub API URL → raw URL に変換
+    const clipA = `/tmp/clipA-${unique}.mp4`; // 仮クリップ（Aで切った背景）
+    const clipB = `/tmp/clipB-${unique}.mp4`; // Bで背景を切り直した本番クリップ
+    const clipNormalized = `/tmp/clipN-${unique}.mp4`;
+
+    // GitHub API → raw URL
     let audioDownloadUrl = audioUrl;
     if (audioUrl.includes("api.github.com")) {
       audioDownloadUrl = audioUrl
@@ -173,7 +178,6 @@ app.post("/clip", async (req, res) => {
         .replace("?ref=main", "");
     }
 
-    // キャッシュバスター付与
     const cacheBust = `?v=${Date.now()}`;
     const bgDownloadUrl = backgroundVideo + cacheBust;
     const audioDownloadUrlWithBust = audioDownloadUrl + cacheBust;
@@ -185,57 +189,113 @@ app.post("/clip", async (req, res) => {
       fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrlWithBust));
       fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitleDownloadUrl));
 
-      // ---- 音声の duration ----
-      const audioDuration = await new Promise((resolve, reject) => {
+      // ---- 音声の duration（A） ----
+      const audioDurationA = await new Promise((resolve, reject) => {
         ffmpeg.ffprobe(audioPath, (err, metadata) => {
           if (err) reject(err);
           else resolve(metadata.format.duration);
         });
       });
 
-      // ---- ① クリップ生成 ----
+      // ---- 背景を A で切る（仮） ----
       await new Promise((resolve, reject) => {
         ffmpeg()
-          .input(bgPath)        // 0:v 背景動画
-          .input(audioPath)     // 1:a 音声
-          .input(subtitlePath)  // 2:v 字幕PNG（軽量化済みなので scale 不要）
+          .input(bgPath)
+          .outputOptions([`-t ${audioDurationA}`, "-c copy"])
+          .save(bgTrimmedA)
+          .on("end", resolve)
+          .on("error", reject);
+      });
+
+      // ---- ① 仮クリップ生成（Aで切った背景） ----
+      await new Promise((resolve, reject) => {
+        ffmpeg()
+          .input(bgTrimmedA)
+          .input(audioPath)
+          .input(subtitlePath)
           .complexFilter([
             { filter: "setpts", options: "PTS-STARTPTS", inputs: "0:v", outputs: "bg_reset" },
             { filter: "asetpts", options: "PTS-STARTPTS", inputs: "1:a", outputs: "audio_reset" },
 
-            // ★ 字幕を中央に配置 ★
             {
               filter: "overlay",
               inputs: ["bg_reset", "2:v"],
-              options: {
-                x: "(W-w)/2",
-                y: "(H-h)/2",
-              },
+              options: { x: "(W-w)/2", y: "(H-h)/2" },
               outputs: "video_overlaid",
             },
 
             { filter: "setpts", options: "PTS-STARTPTS", inputs: "video_overlaid", outputs: "video_fixed" },
             { filter: "asetpts", options: "PTS-STARTPTS", inputs: "audio_reset", outputs: "audio_fixed" },
-            { filter: "apad", options: "pad_dur=0.02", inputs: "audio_fixed", outputs: "audio_padded" },
           ])
           .outputOptions([
             "-map [video_fixed]",
-            "-map [audio_padded]",
+            "-map [audio_fixed]",
             "-c:v libx264",
             "-preset ultrafast",
             "-c:a aac",
             "-pix_fmt yuv420p",
-            `-t ${audioDuration}`,
           ])
-          .save(outputPath)
+          .save(clipA)
           .on("end", resolve)
           .on("error", reject);
       });
 
-      // ---- ② 正規化（duration修復 + CFR化 + faststart）----
+      // ---- 仮クリップの実長（B）を取得 ----
+      const durationB = await new Promise((resolve, reject) => {
+        ffmpeg.ffprobe(clipA, (err, metadata) => {
+          if (err) reject(err);
+          else resolve(metadata.format.duration);
+        });
+      });
+
+      // ---- 背景を B で切り直す（ここがズレゼロの核心） ----
       await new Promise((resolve, reject) => {
         ffmpeg()
-          .input(outputPath)
+          .input(bgPath)
+          .outputOptions([`-t ${durationB}`, "-c copy"])
+          .save(bgTrimmedB)
+          .on("end", resolve)
+          .on("error", reject);
+      });
+
+      // ---- ② 本番クリップ生成（背景をBに強制） ----
+      await new Promise((resolve, reject) => {
+        ffmpeg()
+          .input(bgTrimmedB)
+          .input(audioPath)
+          .input(subtitlePath)
+          .complexFilter([
+            { filter: "setpts", options: "PTS-STARTPTS", inputs: "0:v", outputs: "bg_reset" },
+            { filter: "asetpts", options: "PTS-STARTPTS", inputs: "1:a", outputs: "audio_reset" },
+
+            {
+              filter: "overlay",
+              inputs: ["bg_reset", "2:v"],
+              options: { x: "(W-w)/2", y: "(H-h)/2" },
+              outputs: "video_overlaid",
+            },
+
+            { filter: "setpts", options: "PTS-STARTPTS", inputs: "video_overlaid", outputs: "video_fixed" },
+            { filter: "asetpts", options: "PTS-STARTPTS", inputs: "audio_reset", outputs: "audio_fixed" },
+          ])
+          .outputOptions([
+            "-map [video_fixed]",
+            "-map [audio_fixed]",
+            "-c:v libx264",
+            "-preset ultrafast",
+            "-c:a aac",
+            "-pix_fmt yuv420p",
+            `-t ${durationB}`,   // ★ B を絶対基準に固定
+          ])
+          .save(clipB)
+          .on("end", resolve)
+          .on("error", reject);
+      });
+
+      // ---- ③ 正規化（duration = B） ----
+      await new Promise((resolve, reject) => {
+        ffmpeg()
+          .input(clipB)
           .outputOptions([
             "-c:v libx264",
             "-preset ultrafast",
@@ -243,19 +303,21 @@ app.post("/clip", async (req, res) => {
             "-pix_fmt yuv420p",
             "-movflags +faststart",
           ])
-          .save(normalizedPath)
+          .save(clipNormalized)
           .on("end", resolve)
           .on("error", reject);
       });
 
-      const file = fs.readFileSync(normalizedPath);
+      const file = fs.readFileSync(clipNormalized);
 
       // ---- Cleanup ----
-      try { fs.unlinkSync(bgPath); } catch {}
-      try { fs.unlinkSync(audioPath); } catch {}
-      try { fs.unlinkSync(subtitlePath); } catch {}
-      try { fs.unlinkSync(outputPath); } catch {}
-      try { fs.unlinkSync(normalizedPath); } catch {}
+      for (const p of [
+        bgPath, bgTrimmedA, bgTrimmedB,
+        audioPath, subtitlePath,
+        clipA, clipB, clipNormalized
+      ]) {
+        try { fs.unlinkSync(p); } catch {}
+      }
 
       return file;
     });
@@ -268,6 +330,7 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
+
 
 // ------------------------------
 // POST /final-render-url
