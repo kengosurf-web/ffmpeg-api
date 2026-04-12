@@ -141,8 +141,9 @@ app.get("/health", (req, res) => {
 // ------------------------------
 const jobs = {};
 
+
 // ------------------------------
-// /clip（1文クリップ生成API）完全同期版（scale削除 + 字幕中央配置）
+// /clip（1文クリップ生成API）完全同期版（scale削除 + 字幕中央配置 + 正規化なし）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -154,7 +155,7 @@ app.post("/clip", async (req, res) => {
       });
     }
 
-    console.log("Generating 1-sentence clip (perfect sync, no-scale, centered subtitles)...");
+    console.log("Generating 1-sentence clip (no-normalize, perfect sync, no-scale, centered subtitles)...");
 
     const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
@@ -162,7 +163,6 @@ app.post("/clip", async (req, res) => {
     const audioPath = `/tmp/audio-${unique}.mp3`;
     const subtitlePath = `/tmp/sub-${unique}.png`;
     const outputPath = `/tmp/clip-${unique}.mp4`;
-    const normalizedPath = `/tmp/clip-normalized-${unique}.mp4`;
 
     // GitHub API URL → raw URL に変換
     let audioDownloadUrl = audioUrl;
@@ -193,7 +193,7 @@ app.post("/clip", async (req, res) => {
         });
       });
 
-      // ---- ① クリップ生成 ----
+      // ---- ① クリップ生成（正規化なし）----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgPath)        // 0:v 背景動画
@@ -202,9 +202,6 @@ app.post("/clip", async (req, res) => {
           .complexFilter([
             { filter: "setpts", options: "PTS-STARTPTS", inputs: "0:v", outputs: "bg_reset" },
             { filter: "asetpts", options: "PTS-STARTPTS", inputs: "1:a", outputs: "audio_reset" },
-
-            // ★ scale 削除 → subtitle はそのまま使う ★
-            // sub_scaled を使わず、2:v を直接 overlay に渡す
 
             // ★ 字幕を中央に配置 ★
             {
@@ -235,30 +232,13 @@ app.post("/clip", async (req, res) => {
           .on("error", reject);
       });
 
-      // ---- ② 正規化 ----
-      await new Promise((resolve, reject) => {
-        ffmpeg()
-          .input(outputPath)
-          .outputOptions([
-            "-c:v libx264",
-            "-preset ultrafast",
-            "-c:a aac",
-            "-pix_fmt yuv420p",
-            "-movflags +faststart",
-          ])
-          .save(normalizedPath)
-          .on("end", resolve)
-          .on("error", reject);
-      });
-
-      const file = fs.readFileSync(normalizedPath);
+      const file = fs.readFileSync(outputPath);
 
       // ---- Cleanup ----
       try { fs.unlinkSync(bgPath); } catch {}
       try { fs.unlinkSync(audioPath); } catch {}
       try { fs.unlinkSync(subtitlePath); } catch {}
       try { fs.unlinkSync(outputPath); } catch {}
-      try { fs.unlinkSync(normalizedPath); } catch {}
 
       return file;
     });
@@ -271,7 +251,6 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
-
 
 // ------------------------------
 // POST /final-render-url
