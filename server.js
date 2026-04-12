@@ -400,7 +400,7 @@ app.get("/final-result/:jobId", (req, res) => {
 });
 
 // ------------------------------
-// 最終レンダー処理（軽量版 / フェードなし / 再エンコードなし / キャッシュバスター付き）
+// 最終レンダー処理（軽量版 / フェードなし / 再エンコードなし / キャッシュバスター付き / faststart）
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
   console.log(`Processing final render job (lightweight): ${jobId}`);
@@ -428,12 +428,15 @@ async function processFinalRenderJob(jobId, clips) {
 
     fs.writeFileSync(concatListPath, concatList);
 
-    // ---- concat のみ（超軽量）----
+    // ---- concat のみ（超軽量 + faststart）----
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(concatListPath)
         .inputOptions(["-f concat", "-safe 0"])
-        .outputOptions(["-c copy"])  // 再エンコードなし
+        .outputOptions([
+          "-c copy",              // 再エンコードなし
+          "-movflags +faststart"  // ★ GitHub Raw / SNS 再生高速化
+        ])
         .save(finalOutput)
         .on("end", resolve)
         .on("error", reject);
