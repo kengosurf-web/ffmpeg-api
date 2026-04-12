@@ -143,6 +143,7 @@ const jobs = {};
 
 // ------------------------------
 // /clip（1文クリップ生成API）完全同期版（背景をBに強制）
+// ★ GitHub Raw キャッシュ完全破壊対応版
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -165,8 +166,8 @@ app.post("/clip", async (req, res) => {
     const audioPath = `/tmp/audio-${unique}.mp3`;
     const subtitlePath = `/tmp/sub-${unique}.png`;
 
-    const clipA = `/tmp/clipA-${unique}.mp4`; // 仮クリップ（Aで切った背景）
-    const clipB = `/tmp/clipB-${unique}.mp4`; // Bで背景を切り直した本番クリップ
+    const clipA = `/tmp/clipA-${unique}.mp4`;
+    const clipB = `/tmp/clipB-${unique}.mp4`;
     const clipNormalized = `/tmp/clipN-${unique}.mp4`;
 
     // GitHub API → raw URL
@@ -178,13 +179,52 @@ app.post("/clip", async (req, res) => {
         .replace("?ref=main", "");
     }
 
-    const cacheBust = `?v=${Date.now()}`;
+    // ★ キャッシュバスター強化（複数パラメータ）
+    const cacheBust = `?v=${Date.now()}&cb=${Math.random()}&nocache=1`;
+
     const bgDownloadUrl = backgroundVideo + cacheBust;
     const audioDownloadUrlWithBust = audioDownloadUrl + cacheBust;
     const subtitleDownloadUrl = subtitlePng + cacheBust;
 
+    // ------------------------------
+    // ★ GitHub Raw キャッシュ破壊版 fetchBinaryWithRetry
+    // ------------------------------
+    async function fetchBinaryWithRetry(url, retries = 3) {
+      for (let i = 0; i < retries; i++) {
+        try {
+          const res = await fetch(url, {
+            method: "GET",
+            redirect: "follow",
+            headers: {
+              "User-Agent": "Mozilla/5.0",
+              "Accept": "*/*",
+
+              // ★ Cloudflare / GitHub Raw キャッシュ破壊
+              "Cache-Control": "no-cache, no-store, must-revalidate",
+              "Pragma": "no-cache",
+              "Expires": "0"
+            }
+          });
+
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+
+          return Buffer.from(await res.arrayBuffer());
+        } catch (err) {
+          console.error(`fetchBinaryWithRetry failed (${i + 1}/${retries}):`, err);
+          if (i === retries - 1) throw err;
+          await new Promise(r => setTimeout(r, 300));
+        }
+      }
+    }
+
+    // ------------------------------
+    // ★ FFmpeg ジョブ本体
+    // ------------------------------
     const clipBuffer = await enqueueFfmpegJob(async () => {
-      // ---- ダウンロード ----
+
+      // ---- ダウンロード（キャッシュ破壊済み） ----
       fs.writeFileSync(bgPath, await fetchBinaryWithRetry(bgDownloadUrl));
       fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrlWithBust));
       fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitleDownloadUrl));
@@ -240,7 +280,7 @@ app.post("/clip", async (req, res) => {
           .on("error", reject);
       });
 
-      // ---- 仮クリップの実長（B）を取得 ----
+      // ---- 仮クリップの実長（B） ----
       const durationB = await new Promise((resolve, reject) => {
         ffmpeg.ffprobe(clipA, (err, metadata) => {
           if (err) reject(err);
@@ -248,7 +288,7 @@ app.post("/clip", async (req, res) => {
         });
       });
 
-      // ---- 背景を B で切り直す（ここがズレゼロの核心） ----
+      // ---- 背景を B で切り直す ----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgPath)
@@ -285,14 +325,14 @@ app.post("/clip", async (req, res) => {
             "-preset ultrafast",
             "-c:a aac",
             "-pix_fmt yuv420p",
-            `-t ${durationB}`,   // ★ B を絶対基準に固定
+            `-t ${durationB}`,
           ])
           .save(clipB)
           .on("end", resolve)
           .on("error", reject);
       });
 
-      // ---- ③ 正規化（duration = B） ----
+      // ---- ③ 正規化 ----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(clipB)
