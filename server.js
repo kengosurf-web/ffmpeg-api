@@ -495,13 +495,10 @@ async function processFinalRenderJob(jobId, clips) {
     const ff = ffmpeg();
     filterList.forEach((c) => ff.input(c.path));
 
-    // concat filter の構築
-    const filterComplex = `
-      ${filterList
-        .map((c, i) => `[${i}:v][${i}:a]`)
-        .join("")}
-      concat=n=${filterList.length}:v=1:a=1[v][a]
-    `;
+    // ★ filterComplex を完全1行にする（最重要）
+    const filterComplex =
+      filterList.map((c, i) => `[${i}:v][${i}:a]`).join("") +
+      `concat=n=${filterList.length}:v=1:a=1[v][a]`;
 
     await new Promise((resolve, reject) => {
       ff
@@ -509,10 +506,10 @@ async function processFinalRenderJob(jobId, clips) {
         .outputOptions([
           "-map [v]",
           "-map [a]",
-          "-c:v libx264",        // ★ concat filter は copy 不可 → 再エンコード必須
-          "-preset veryfast",    // ★ 高速
-          "-c:a aac",            // 音声は軽量エンコード
-          "-movflags +faststart" // SNS / GitHub Raw 最適化
+          "-c:v libx264",
+          "-preset veryfast",
+          "-c:a aac",
+          "-movflags +faststart"
         ])
         .save(finalOutput)
         .on("end", resolve)
@@ -530,6 +527,7 @@ async function processFinalRenderJob(jobId, clips) {
     throw err;
   }
 }
+
 
 // ------------------------------
 // BGM ミックス処理（音量調整 + フェードアウト付き）
