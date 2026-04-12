@@ -142,7 +142,7 @@ app.get("/health", (req, res) => {
 const jobs = {};
 
 // ------------------------------
-// /clip（1文クリップ生成API）完全同期版（キャッシュバスター付き + 字幕中央配置）
+// /clip（1文クリップ生成API）完全同期版（scale削除 + 字幕中央配置）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -154,7 +154,7 @@ app.post("/clip", async (req, res) => {
       });
     }
 
-    console.log("Generating 1-sentence clip (perfect sync version, cache-busted, centered subtitles)...");
+    console.log("Generating 1-sentence clip (perfect sync, no-scale, centered subtitles)...");
 
     const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
@@ -198,23 +198,18 @@ app.post("/clip", async (req, res) => {
         ffmpeg()
           .input(bgPath)        // 0:v 背景動画
           .input(audioPath)     // 1:a 音声
-          .input(subtitlePath)  // 2:v 字幕PNG
+          .input(subtitlePath)  // 2:v 字幕PNG（軽量化済みなので scale 不要）
           .complexFilter([
             { filter: "setpts", options: "PTS-STARTPTS", inputs: "0:v", outputs: "bg_reset" },
             { filter: "asetpts", options: "PTS-STARTPTS", inputs: "1:a", outputs: "audio_reset" },
 
-            // 字幕の scale（必要なら残す）
-            {
-              filter: "scale",
-              options: { w: "iw*0.5", h: "ih*0.5" },
-              inputs: "2:v",
-              outputs: "sub_scaled",
-            },
+            // ★ scale 削除 → subtitle はそのまま使う ★
+            // sub_scaled を使わず、2:v を直接 overlay に渡す
 
             // ★ 字幕を中央に配置 ★
             {
               filter: "overlay",
-              inputs: ["bg_reset", "sub_scaled"],
+              inputs: ["bg_reset", "2:v"],
               options: {
                 x: "(W-w)/2",
                 y: "(H-h)/2",
@@ -276,6 +271,7 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
+
 
 // ------------------------------
 // POST /final-render-url
