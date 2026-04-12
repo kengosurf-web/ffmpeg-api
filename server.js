@@ -141,9 +141,8 @@ app.get("/health", (req, res) => {
 // ------------------------------
 const jobs = {};
 
-
 // ------------------------------
-// /clip（1文クリップ生成API）完全同期版（scale削除 + 字幕中央配置 + 正規化なし）
+// /clip（1文クリップ生成API）完全同期版（scale削除 + 字幕中央配置 + 正規化あり）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -155,7 +154,7 @@ app.post("/clip", async (req, res) => {
       });
     }
 
-    console.log("Generating 1-sentence clip (no-normalize, perfect sync, no-scale, centered subtitles)...");
+    console.log("Generating 1-sentence clip (perfect sync, normalized, no-scale, centered subtitles)...");
 
     const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
@@ -163,6 +162,7 @@ app.post("/clip", async (req, res) => {
     const audioPath = `/tmp/audio-${unique}.mp3`;
     const subtitlePath = `/tmp/sub-${unique}.png`;
     const outputPath = `/tmp/clip-${unique}.mp4`;
+    const normalizedPath = `/tmp/clip-normalized-${unique}.mp4`;
 
     // GitHub API URL → raw URL に変換
     let audioDownloadUrl = audioUrl;
@@ -193,7 +193,7 @@ app.post("/clip", async (req, res) => {
         });
       });
 
-      // ---- ① クリップ生成（正規化なし）----
+      // ---- ① クリップ生成 ----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgPath)        // 0:v 背景動画
@@ -232,13 +232,30 @@ app.post("/clip", async (req, res) => {
           .on("error", reject);
       });
 
-      const file = fs.readFileSync(outputPath);
+      // ---- ② 正規化（duration修復 + CFR化 + faststart）----
+      await new Promise((resolve, reject) => {
+        ffmpeg()
+          .input(outputPath)
+          .outputOptions([
+            "-c:v libx264",
+            "-preset ultrafast",
+            "-c:a aac",
+            "-pix_fmt yuv420p",
+            "-movflags +faststart",
+          ])
+          .save(normalizedPath)
+          .on("end", resolve)
+          .on("error", reject);
+      });
+
+      const file = fs.readFileSync(normalizedPath);
 
       // ---- Cleanup ----
       try { fs.unlinkSync(bgPath); } catch {}
       try { fs.unlinkSync(audioPath); } catch {}
       try { fs.unlinkSync(subtitlePath); } catch {}
       try { fs.unlinkSync(outputPath); } catch {}
+      try { fs.unlinkSync(normalizedPath); } catch {}
 
       return file;
     });
