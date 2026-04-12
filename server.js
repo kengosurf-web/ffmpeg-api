@@ -65,33 +65,33 @@ async function fetchBinaryWithRetry(url, maxRetries = 5) {
   throw new Error("Failed to fetch binary after multiple retries");
 }
 
-// ------------------------------
-// downloadToTmp（Jamendo / Koyeb 対応版）
-// ------------------------------
-async function downloadToTmp(url, destPath) {
+async function downloadToTmp(url, dest) {
   console.log("Downloading:", url);
 
-  const response = await fetch(url, {
+  const res = await fetch(url, {
     method: "GET",
-    redirect: "follow",
     headers: {
-      "User-Agent": "Mozilla/5.0",
-      "Accept": "*/*",
-    },
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0"
+    }
   });
 
-  console.log("Status:", response.status);
-
-  if (!response.ok) {
-    throw new Error(`Download failed: ${response.status} ${response.statusText}`);
+  if (!res.ok) {
+    throw new Error(`Download failed: ${res.status} ${res.statusText}`);
   }
 
-  const buffer = Buffer.from(await response.arrayBuffer());
-  console.log("Downloaded bytes:", buffer.length);
+  const fileStream = fs.createWriteStream(dest);
 
-  fs.writeFileSync(destPath, buffer);
-  console.log("Saved to:", destPath);
+  await new Promise((resolve, reject) => {
+    res.body.pipe(fileStream);
+    res.body.on("error", reject);
+    fileStream.on("finish", resolve);
+  });
+
+  console.log("Saved to:", dest);
 }
+
 
 // ------------------------------
 // Global FFmpeg Job Queue
