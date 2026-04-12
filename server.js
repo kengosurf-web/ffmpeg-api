@@ -142,7 +142,7 @@ app.get("/health", (req, res) => {
 const jobs = {};
 
 // ------------------------------
-// /clip（1文クリップ生成API）完全同期版（キャッシュバスター付き）
+// /clip（1文クリップ生成API）完全同期版（キャッシュバスター付き + 字幕中央配置）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -154,7 +154,7 @@ app.post("/clip", async (req, res) => {
       });
     }
 
-    console.log("Generating 1-sentence clip (perfect sync version, cache-busted)...");
+    console.log("Generating 1-sentence clip (perfect sync version, cache-busted, centered subtitles)...");
 
     const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
@@ -173,18 +173,19 @@ app.post("/clip", async (req, res) => {
         .replace("?ref=main", "");
     }
 
-    // キャッシュバスター付与（GitHub Raw / CDN 対策）
+    // キャッシュバスター付与
     const cacheBust = `?v=${Date.now()}`;
     const bgDownloadUrl = backgroundVideo + cacheBust;
     const audioDownloadUrlWithBust = audioDownloadUrl + cacheBust;
+    const subtitleDownloadUrl = subtitlePng + cacheBust;
 
     const clipBuffer = await enqueueFfmpegJob(async () => {
-      // ---- ダウンロード（キャッシュバスター付きURLを使用）----
+      // ---- ダウンロード ----
       fs.writeFileSync(bgPath, await fetchBinaryWithRetry(bgDownloadUrl));
       fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrlWithBust));
-      fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitlePng));
+      fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitleDownloadUrl));
 
-      // ---- 音声の duration を取得 ----
+      // ---- 音声の duration ----
       const audioDuration = await new Promise((resolve, reject) => {
         ffmpeg.ffprobe(audioPath, (err, metadata) => {
           if (err) reject(err);
@@ -199,51 +200,31 @@ app.post("/clip", async (req, res) => {
           .input(audioPath)     // 1:a 音声
           .input(subtitlePath)  // 2:v 字幕PNG
           .complexFilter([
-            {
-              filter: "setpts",
-              options: "PTS-STARTPTS",
-              inputs: "0:v",
-              outputs: "bg_reset",
-            },
-            {
-              filter: "asetpts",
-              options: "PTS-STARTPTS",
-              inputs: "1:a",
-              outputs: "audio_reset",
-            },
+            { filter: "setpts", options: "PTS-STARTPTS", inputs: "0:v", outputs: "bg_reset" },
+            { filter: "asetpts", options: "PTS-STARTPTS", inputs: "1:a", outputs: "audio_reset" },
+
+            // 字幕の scale（必要なら残す）
             {
               filter: "scale",
               options: { w: "iw*0.5", h: "ih*0.5" },
               inputs: "2:v",
               outputs: "sub_scaled",
             },
+
+            // ★ 字幕を中央に配置 ★
             {
               filter: "overlay",
               inputs: ["bg_reset", "sub_scaled"],
               options: {
                 x: "(W-w)/2",
-                y: "H-h-80",
+                y: "(H-h)/2",
               },
               outputs: "video_overlaid",
             },
-            {
-              filter: "setpts",
-              options: "PTS-STARTPTS",
-              inputs: "video_overlaid",
-              outputs: "video_fixed",
-            },
-            {
-              filter: "asetpts",
-              options: "PTS-STARTPTS",
-              inputs: "audio_reset",
-              outputs: "audio_fixed",
-            },
-            {
-              filter: "apad",
-              options: "pad_dur=0.02",
-              inputs: "audio_fixed",
-              outputs: "audio_padded",
-            },
+
+            { filter: "setpts", options: "PTS-STARTPTS", inputs: "video_overlaid", outputs: "video_fixed" },
+            { filter: "asetpts", options: "PTS-STARTPTS", inputs: "audio_reset", outputs: "audio_fixed" },
+            { filter: "apad", options: "pad_dur=0.02", inputs: "audio_fixed", outputs: "audio_padded" },
           ])
           .outputOptions([
             "-map [video_fixed]",
@@ -259,7 +240,7 @@ app.post("/clip", async (req, res) => {
           .on("error", reject);
       });
 
-      // ---- ② 正規化ステップ ----
+      // ---- ② 正規化 ----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(outputPath)
@@ -277,6 +258,7 @@ app.post("/clip", async (req, res) => {
 
       const file = fs.readFileSync(normalizedPath);
 
+      // ---- Cleanup ----
       try { fs.unlinkSync(bgPath); } catch {}
       try { fs.unlinkSync(audioPath); } catch {}
       try { fs.unlinkSync(subtitlePath); } catch {}
@@ -294,7 +276,6 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
-
 
 // ------------------------------
 // POST /final-render-url
@@ -510,9 +491,8 @@ async function processFinalRenderJob(jobId, clips) {
   }
 }
 
-
 // ------------------------------
-// BGM ミックス処理（正しい実装）
+// BGM ミックス処理（音量調整 + フェードアウト付き）
 // ------------------------------
 async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
   console.log(`Processing BGM mix job: ${jobId}`);
@@ -526,14 +506,53 @@ async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
     await downloadToTmp(finalVideoUrl, videoPath);
     await downloadToTmp(bgmUrl, bgmPath);
 
+    // Final video duration を取得（フェードアウトに必要）
+    const videoDuration = await new Promise((resolve, reject) => {
+      ffmpeg.ffprobe(videoPath, (err, metadata) => {
+        if (err) reject(err);
+        else resolve(metadata.format.duration);
+      });
+    });
+
+    const fadeStart = Math.max(videoDuration - 1, 0); // 最後の1秒でフェードアウト
+
     await new Promise((resolve, reject) => {
       ffmpeg()
-        .input(videoPath)
-        .input(bgmPath)
+        .input(videoPath)  // 0:v, 0:a
+        .input(bgmPath)    // 1:a
         .complexFilter([
-          "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[aout]"
+          // BGM の音量を下げる（20%）
+          {
+            filter: "volume",
+            options: "0.2",
+            inputs: "1:a",
+            outputs: "bgm_low"
+          },
+          // BGM をフェードアウト
+          {
+            filter: "afade",
+            options: `t=out:st=${fadeStart}:d=1`,
+            inputs: "bgm_low",
+            outputs: "bgm_faded"
+          },
+          // 元の音声 + BGM をミックス
+          {
+            filter: "amix",
+            options: {
+              inputs: 2,
+              duration: "first",
+              dropout_transition: 0
+            },
+            inputs: ["0:a", "bgm_faded"],
+            outputs: "aout"
+          }
         ])
-        .outputOptions(["-map 0:v", "-map [aout]", "-c:v copy", "-c:a aac"])
+        .outputOptions([
+          "-map 0:v",     // 元の映像
+          "-map [aout]",  // ミックス後の音声
+          "-c:v copy",
+          "-c:a aac"
+        ])
         .save(outputPath)
         .on("end", resolve)
         .on("error", reject);
