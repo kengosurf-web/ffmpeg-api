@@ -506,13 +506,15 @@ async function processFinalRenderJob(jobId, clips) {
     await new Promise((resolve, reject) => {
       ff
         .complexFilter(filterComplex)
-        .outputOptions([
-          "-map [v]",
-          "-map [a]",
-          "-c:v copy",              // 映像は再エンコードなし
-          "-c:a aac",               // 音声のみ再エンコード（最軽量）
-          "-movflags +faststart"
-        ])
+.outputOptions([
+  "-map [v]",
+  "-map [a]",
+  "-c:v libx264",        // ★ concat filter は copy 不可 → 再エンコード必須
+  "-preset veryfast",    // ★ 高速
+  "-c:a aac",            // 音声は軽量エンコード
+  "-movflags +faststart" // SNS / GitHub Raw 最適化
+])
+
         .save(finalOutput)
         .on("end", resolve)
         .on("error", reject);
