@@ -463,42 +463,55 @@ app.get("/final-result/:jobId", (req, res) => {
 });
 
 // ------------------------------
-// 最終レンダー処理（軽量版 / フェードなし / 再エンコードなし / キャッシュバスター付き / faststart）
+// 最終レンダー（ロングエスト基準 / concat filter）
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
-  console.log(`Processing final render job (lightweight): ${jobId}`);
+  console.log(`Processing final render job (longest-PTS mode): ${jobId}`);
 
   const id = uuidv4();
-  const concatListPath = `/tmp/list-${id}.txt`;
+  const filterList = [];
   const finalOutput = `/tmp/final-${id}.mp4`;
 
   try {
-    let concatList = "";
-
-    // キャッシュバスター（GitHub Raw / CDN 対策）
     const cacheBust = `?v=${Date.now()}`;
 
+    let index = 0;
     for (const clip of clips) {
       const localPath = `/tmp/clip-${uuidv4()}.mp4`;
-
-      // 各クリップURLにキャッシュバスターを付与
       const clipDownloadUrl = clip.clipUrl + cacheBust;
 
       await downloadToTmp(clipDownloadUrl, localPath);
 
-      concatList += `file '${localPath}'\n`;
+      filterList.push({
+        path: localPath,
+        label: `v${index}`,
+        alabel: `a${index}`,
+      });
+
+      index++;
     }
 
-    fs.writeFileSync(concatListPath, concatList);
+    // ffmpeg filter_complex の入力を構築
+    const ff = ffmpeg();
+    filterList.forEach((c) => ff.input(c.path));
 
-    // ---- concat のみ（超軽量 + faststart）----
+    // concat filter の構築
+    const filterComplex = `
+      ${filterList
+        .map((c, i) => `[${i}:v][${i}:a]`)
+        .join("")}
+      concat=n=${filterList.length}:v=1:a=1[v][a]
+    `;
+
     await new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(concatListPath)
-        .inputOptions(["-f concat", "-safe 0"])
+      ff
+        .complexFilter(filterComplex)
         .outputOptions([
-          "-c copy",              // 再エンコードなし
-          "-movflags +faststart"  // ★ GitHub Raw / SNS 再生高速化
+          "-map [v]",
+          "-map [a]",
+          "-c:v copy",              // 映像は再エンコードなし
+          "-c:a aac",               // 音声のみ再エンコード（最軽量）
+          "-movflags +faststart"
         ])
         .save(finalOutput)
         .on("end", resolve)
@@ -508,7 +521,7 @@ async function processFinalRenderJob(jobId, clips) {
     jobs[jobId].status = "done";
     jobs[jobId].outputPath = finalOutput;
 
-    console.log(`Final render job completed (lightweight): ${jobId}`);
+    console.log(`Final render job completed (longest-PTS mode): ${jobId}`);
 
   } catch (err) {
     console.error("FINAL RENDER JOB ERROR:", err);
@@ -516,6 +529,7 @@ async function processFinalRenderJob(jobId, clips) {
     throw err;
   }
 }
+
 
 // ------------------------------
 // BGM ミックス処理（音量調整 + フェードアウト付き）
