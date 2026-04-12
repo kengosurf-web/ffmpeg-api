@@ -408,19 +408,17 @@ app.get("/final-result/:jobId", (req, res) => {
 });
 
 // ------------------------------
-// 最終レンダー処理（キャッシュバスター付き）
+// 最終レンダー処理（軽量版 / フェードなし / 再エンコードなし / キャッシュバスター付き）
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
-  console.log(`Processing final render job: ${jobId}`);
+  console.log(`Processing final render job (lightweight): ${jobId}`);
 
   const id = uuidv4();
   const concatListPath = `/tmp/list-${id}.txt`;
-  const concatOutput = `/tmp/concat-${id}.mp4`;
   const finalOutput = `/tmp/final-${id}.mp4`;
 
   try {
     let concatList = "";
-    let totalDuration = 0;
 
     // キャッシュバスター（GitHub Raw / CDN 対策）
     const cacheBust = `?v=${Date.now()}`;
@@ -428,52 +426,22 @@ async function processFinalRenderJob(jobId, clips) {
     for (const clip of clips) {
       const localPath = `/tmp/clip-${uuidv4()}.mp4`;
 
-      // ここで各クリップURLにキャッシュバスターを付与
+      // 各クリップURLにキャッシュバスターを付与
       const clipDownloadUrl = clip.clipUrl + cacheBust;
 
       await downloadToTmp(clipDownloadUrl, localPath);
 
-      const videoDuration = await new Promise((resolve, reject) => {
-        ffmpeg.ffprobe(localPath, (err, metadata) => {
-          if (err) reject(err);
-          else resolve(metadata.format.duration);
-        });
-      });
-
-      totalDuration += videoDuration;
       concatList += `file '${localPath}'\n`;
     }
 
     fs.writeFileSync(concatListPath, concatList);
 
+    // ---- concat のみ（超軽量）----
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(concatListPath)
         .inputOptions(["-f concat", "-safe 0"])
-        .outputOptions(["-c copy"])
-        .save(concatOutput)
-        .on("end", () => resolve())
-        .on("error", reject);
-    });
-
-    const fadeInSec = 0.8;
-    const fadeOutSec = 0.8;
-    const fadeOutStart = Math.max(totalDuration - fadeOutSec, 0);
-
-    await new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(concatOutput)
-        .videoFilters([
-          "setpts=PTS-STARTPTS",
-          `fade=t=in:st=0:d=${fadeInSec}`,
-          `fade=t=out:st=${fadeOutStart}:d=${fadeOutSec}`,
-        ])
-        .audioFilters([
-          "asetpts=PTS-STARTPTS",
-          `afade=t=in:st=0:d=${fadeInSec}`,
-          `afade=t=out:st=${fadeOutStart}:d=${fadeOutSec}`,
-        ])
-        .outputOptions(["-c:v libx264", "-c:a aac", "-pix_fmt yuv420p"])
+        .outputOptions(["-c copy"])  // 再エンコードなし
         .save(finalOutput)
         .on("end", resolve)
         .on("error", reject);
@@ -482,7 +450,7 @@ async function processFinalRenderJob(jobId, clips) {
     jobs[jobId].status = "done";
     jobs[jobId].outputPath = finalOutput;
 
-    console.log(`Final render job completed: ${jobId}`);
+    console.log(`Final render job completed (lightweight): ${jobId}`);
 
   } catch (err) {
     console.error("FINAL RENDER JOB ERROR:", err);
