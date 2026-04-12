@@ -494,13 +494,14 @@ async function processFinalRenderJob(jobId, clips) {
   const finalOutput = `/tmp/final-${id}.mp4`;
 
   try {
-    const cacheBust = `?v=${Date.now()}`;
+    // ★ キャッシュバスター強化（複数パラメータ）
+    const cacheBust = `?v=${Date.now()}&cb=${Math.random()}&nocache=1`;
 
     for (const clip of clips) {
       const localPath = `/tmp/clip-${uuidv4()}.mp4`;
       const clipDownloadUrl = clip.clipUrl + cacheBust;
 
-      // クリップをダウンロード
+      // クリップをダウンロード（downloadToTmp 側もキャッシュ破壊対応する）
       await downloadToTmp(clipDownloadUrl, localPath);
 
       // ★ ffprobe でストリーム番号を取得
@@ -523,8 +524,8 @@ async function processFinalRenderJob(jobId, clips) {
 
       filterList.push({
         path: localPath,
-        v: videoStream.index, // ★ 動的に取得した映像ストリーム番号
-        a: audioStream.index  // ★ 動的に取得した音声ストリーム番号
+        v: videoStream.index,
+        a: audioStream.index
       });
     }
 
@@ -543,7 +544,7 @@ async function processFinalRenderJob(jobId, clips) {
         .outputOptions([
           "-map [v]",
           "-map [a]",
-          "-c:v libx264",        // concat filter は copy 不可
+          "-c:v libx264",
           "-preset veryfast",
           "-c:a aac",
           "-movflags +faststart"
@@ -561,7 +562,8 @@ async function processFinalRenderJob(jobId, clips) {
   } catch (err) {
     console.error("FINAL RENDER JOB ERROR:", err);
     jobs[jobId].status = "error";
-    throw err;
+    jobs[jobId].errorMessage = err.message || String(err);
+    return;
   }
 }
 
