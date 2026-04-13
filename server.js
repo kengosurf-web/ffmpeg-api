@@ -420,6 +420,7 @@ app.get("/final-render-status", (req, res) => {
     return res.json({
       jobId,
       status: "error",
+      currentStep: job.currentStep || null,
       errorMessage: job.errorMessage || "Unknown error"
     });
   }
@@ -428,12 +429,19 @@ app.get("/final-render-status", (req, res) => {
     return res.json({
       jobId,
       status: "done",
+      currentStep: "completed",
       url: `/final-result/${jobId}`,
     });
   }
 
-  res.json({ jobId, status: job.status });
+  // processing
+  res.json({
+    jobId,
+    status: job.status,
+    currentStep: job.currentStep || "processing"
+  });
 });
+
 
 // ------------------------------
 // POST /bgm-mix
@@ -447,7 +455,12 @@ app.post("/bgm-mix", async (req, res) => {
     }
 
     const jobId = uuidv4();
-    jobs[jobId] = { status: "processing", outputPath: null, errorMessage: null };
+    jobs[jobId] = { 
+      status: "processing", 
+      currentStep: "queued",
+      outputPath: null, 
+      errorMessage: null 
+    };
 
     console.log(`BGM mix job registered: ${jobId}`);
 
@@ -456,17 +469,19 @@ app.post("/bgm-mix", async (req, res) => {
         console.error("BGM MIX JOB ERROR (queued):", err);
         if (jobs[jobId]) {
           jobs[jobId].status = "error";
+          jobs[jobId].currentStep = "error";
           jobs[jobId].errorMessage = err.message || String(err);
         }
       });
 
-    res.json({ jobId, status: "processing" });
+    res.json({ jobId, status: "processing", currentStep: "queued" });
 
   } catch (err) {
     console.error("SERVER ERROR (/bgm-mix):", err);
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
+
 
 // ------------------------------
 // GET /bgm-mix-status
@@ -484,6 +499,7 @@ app.get("/bgm-mix-status", (req, res) => {
     return res.json({
       jobId,
       status: "error",
+      currentStep: job.currentStep || null,
       errorMessage: job.errorMessage || "Unknown error"
     });
   }
@@ -492,12 +508,19 @@ app.get("/bgm-mix-status", (req, res) => {
     return res.json({
       jobId,
       status: "done",
+      currentStep: "completed",
       url: `/final-result/${jobId}`,
     });
   }
 
-  res.json({ jobId, status: job.status });
+  // processing
+  res.json({
+    jobId,
+    status: job.status,
+    currentStep: job.currentStep || "processing"
+  });
 });
+
 
 // ------------------------------
 // GET /final-result/:jobId
