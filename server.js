@@ -99,14 +99,14 @@ app.get("/health", (req, res) => {
 const jobs = {};
 
 // ------------------------------
-// /clip（最軽量 A 切り版）
+// /clip（最軽量 A 切り版・最適化済み）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
     const { subtitlePng, audioUrl, backgroundVideo } = req.body;
 
     // ------------------------------
-    // fetchBinaryWithRetry（忘れていたので追加）
+    // fetchBinaryWithRetry（軽量・安定版）
     // ------------------------------
     async function fetchBinaryWithRetry(url, retries = 3) {
       for (let i = 0; i < retries; i++) {
@@ -117,9 +117,7 @@ app.post("/clip", async (req, res) => {
             headers: {
               "User-Agent": "Mozilla/5.0",
               "Accept": "*/*",
-              "Cache-Control": "no-cache, no-store, must-revalidate",
-              "Pragma": "no-cache",
-              "Expires": "0"
+              "Cache-Control": "no-cache",
             }
           });
 
@@ -129,7 +127,7 @@ app.post("/clip", async (req, res) => {
         } catch (err) {
           console.error(`fetchBinaryWithRetry failed (${i + 1}/${retries}):`, err);
           if (i === retries - 1) throw err;
-          await new Promise(r => setTimeout(r, 300));
+          await new Promise(r => setTimeout(r, 200));
         }
       }
     }
@@ -152,12 +150,12 @@ app.post("/clip", async (req, res) => {
     // ------------------------------
     // ダウンロード（軽量）
     // ------------------------------
-    fs.writeFileSync(bgPath, await fetchBinaryWithRetry(backgroundVideo));
-    fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioUrl));
-    fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitlePng));
+    fs.writeFileSync(bgPath, await fetchBinaryWithRetry(backgroundVideo + "?cb=1"));
+    fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioUrl + "?cb=1"));
+    fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitlePng + "?cb=1"));
 
     // ------------------------------
-    // 音声を AAC に安定化
+    // 音声を AAC に安定化（軽量）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -194,7 +192,7 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // overlay（clip）
+    // overlay（字幕合成）※唯一の重い処理
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -223,16 +221,14 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // 正規化（faststart）
+    // 正規化（映像は copy → 最軽量）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(clip)
         .outputOptions([
-          "-c:v libx264",
-          "-preset ultrafast",
+          "-c:v copy",          // ← 映像はコピーでOK（軽量化ポイント）
           "-c:a aac",
-          "-pix_fmt yuv420p",
           "-movflags +faststart"
         ])
         .save(clipFast)
@@ -258,6 +254,7 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 
 // ------------------------------
