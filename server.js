@@ -105,6 +105,38 @@ app.post("/clip", async (req, res) => {
   try {
     const { subtitlePng, audioUrl, backgroundVideo } = req.body;
 
+    // ------------------------------
+    // fetchBinaryWithRetry（忘れていたので追加）
+    // ------------------------------
+    async function fetchBinaryWithRetry(url, retries = 3) {
+      for (let i = 0; i < retries; i++) {
+        try {
+          const res = await fetch(url, {
+            method: "GET",
+            redirect: "follow",
+            headers: {
+              "User-Agent": "Mozilla/5.0",
+              "Accept": "*/*",
+              "Cache-Control": "no-cache, no-store, must-revalidate",
+              "Pragma": "no-cache",
+              "Expires": "0"
+            }
+          });
+
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+          return Buffer.from(await res.arrayBuffer());
+        } catch (err) {
+          console.error(`fetchBinaryWithRetry failed (${i + 1}/${retries}):`, err);
+          if (i === retries - 1) throw err;
+          await new Promise(r => setTimeout(r, 300));
+        }
+      }
+    }
+
+    // ------------------------------
+    // パス生成
+    // ------------------------------
     const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
     const bgPath = `/tmp/bg-${unique}.mp4`;
@@ -117,12 +149,16 @@ app.post("/clip", async (req, res) => {
     const clip = `/tmp/clip-${unique}.mp4`;
     const clipFast = `/tmp/clipF-${unique}.mp4`;
 
-    // ダウンロード
+    // ------------------------------
+    // ダウンロード（軽量）
+    // ------------------------------
     fs.writeFileSync(bgPath, await fetchBinaryWithRetry(backgroundVideo));
     fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioUrl));
     fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitlePng));
 
+    // ------------------------------
     // 音声を AAC に安定化
+    // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(audioPath)
@@ -135,7 +171,9 @@ app.post("/clip", async (req, res) => {
         .on("error", reject);
     });
 
+    // ------------------------------
     // A（音声の長さ）
+    // ------------------------------
     const durationA = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(audioFixed, (err, meta) => {
         if (err) reject(err);
@@ -143,7 +181,9 @@ app.post("/clip", async (req, res) => {
       });
     });
 
-    // 背景を A で切る（copy）
+    // ------------------------------
+    // 背景を A で切る（copy → 最軽量）
+    // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(bgPath)
@@ -153,7 +193,9 @@ app.post("/clip", async (req, res) => {
         .on("error", reject);
     });
 
+    // ------------------------------
     // overlay（clip）
+    // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(bgA)
@@ -180,7 +222,9 @@ app.post("/clip", async (req, res) => {
         .on("error", reject);
     });
 
+    // ------------------------------
     // 正規化（faststart）
+    // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(clip)
@@ -196,6 +240,9 @@ app.post("/clip", async (req, res) => {
         .on("error", reject);
     });
 
+    // ------------------------------
+    // 出力
+    // ------------------------------
     const file = fs.readFileSync(clipFast);
 
     // cleanup
@@ -207,6 +254,7 @@ app.post("/clip", async (req, res) => {
     res.send(file);
 
   } catch (err) {
+    console.error("SERVER ERROR (/clip):", err);
     res.status(500).json({ error: err.message });
   }
 });
