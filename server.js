@@ -111,12 +111,12 @@ app.post("/clip", async (req, res) => {
       });
     }
 
-    console.log("Generating 1-sentence clip (背景ストリーム完全除去・安全版)...");
+    console.log("Generating 1-sentence clip (冷静ミニマム版)...");
 
     const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
     const bgPath = `/tmp/bg-${unique}.mp4`;
-    const bgClean = `/tmp/bgC-${unique}.mp4`;       // ←背景ストリーム完全除去版
+    const bgClean = `/tmp/bgC-${unique}.mp4`;
     const bgTrimmedA = `/tmp/bgA-${unique}.mp4`;
     const bgTrimmedB = `/tmp/bgB-${unique}.mp4`;
 
@@ -176,20 +176,16 @@ app.post("/clip", async (req, res) => {
       fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitleDownloadUrl));
 
       // ----------------------------------------------------
-      // 背景動画のストリーム完全除去（安全版：映像は全部拾う＋再エンコード）
+      // 背景動画のストリーム最小除去（冷静版）
+      // 映像だけ残す、音声だけ消す。他は触らない。
       // ----------------------------------------------------
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgPath)
           .outputOptions([
-            "-map 0:v",      // 映像ストリームは全部拾う（0:v:0 でも 0:v:1 でもOK）
-            "-map -0:a",     // 音声削除
-            "-map -0:s",     // 字幕削除
-            "-map -0:d",     // データストリーム削除
-            "-map -0:t",     // タイムコード削除
-            "-map -0:u",     // udta/GPS削除
-            "-map -0:V",     // QuickTime metadata削除
-            "-c:v libx264",  // 映像を再生成（copyしない）
+            "-map 0:v",      // 映像は全部拾う
+            "-an",           // 音声だけ消す
+            "-c:v libx264",  // 再エンコード（copyしない）
             "-pix_fmt yuv420p"
           ])
           .save(bgClean)
