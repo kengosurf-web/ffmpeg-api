@@ -25,46 +25,6 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchBinaryWithRetry(url, maxRetries = 5) {
-  let attempt = 0;
-
-  while (attempt < maxRetries) {
-    try {
-      const res = await fetch(url, {
-        redirect: "follow",
-        timeout: 15000,
-      });
-
-      const contentType = res.headers.get("content-type") || "";
-
-      if (contentType.includes("text/html")) {
-        console.log(`HTML detected on attempt ${attempt + 1}, retrying...`);
-        await wait(300 + attempt * 200);
-        attempt++;
-        continue;
-      }
-
-      const buffer = Buffer.from(await res.arrayBuffer());
-
-      if (buffer.length === 0) {
-        console.log(`0-byte buffer on attempt ${attempt + 1}, retrying...`);
-        await wait(300 + attempt * 200);
-        attempt++;
-        continue;
-      }
-
-      return buffer;
-
-    } catch (err) {
-      console.log(`Fetch error on attempt ${attempt + 1}:`, err.message);
-      await wait(300 + attempt * 200);
-      attempt++;
-    }
-  }
-
-  throw new Error("Failed to fetch binary after multiple retries");
-}
-
 async function downloadToTmp(url, dest) {
   console.log("Downloading:", url);
 
@@ -91,7 +51,6 @@ async function downloadToTmp(url, dest) {
 
   console.log("Saved to:", dest);
 }
-
 
 // ------------------------------
 // Global FFmpeg Job Queue
@@ -134,16 +93,13 @@ app.get("/health", (req, res) => {
   res.status(200).send("OK");
 });
 
-
-
 // ------------------------------
 // 非同期ジョブ管理
 // ------------------------------
 const jobs = {};
 
 // ------------------------------
-// /clip（1文クリップ生成API）完全同期版（背景をBに強制）
-// ★ GitHub Raw キャッシュ完全破壊対応版
+// /clip（1文クリップ生成API）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -170,7 +126,7 @@ app.post("/clip", async (req, res) => {
     const clipB = `/tmp/clipB-${unique}.mp4`;
     const clipNormalized = `/tmp/clipN-${unique}.mp4`;
 
-    // GitHub API → raw URL
+    // GitHub Raw URL 変換
     let audioDownloadUrl = audioUrl;
     if (audioUrl.includes("api.github.com")) {
       audioDownloadUrl = audioUrl
@@ -179,16 +135,13 @@ app.post("/clip", async (req, res) => {
         .replace("?ref=main", "");
     }
 
-    // ★ キャッシュバスター強化（複数パラメータ）
     const cacheBust = `?v=${Date.now()}&cb=${Math.random()}&nocache=1`;
 
     const bgDownloadUrl = backgroundVideo + cacheBust;
     const audioDownloadUrlWithBust = audioDownloadUrl + cacheBust;
     const subtitleDownloadUrl = subtitlePng + cacheBust;
 
-    // ------------------------------
-    // ★ GitHub Raw キャッシュ破壊版 fetchBinaryWithRetry
-    // ------------------------------
+    // fetchBinaryWithRetry（キャッシュ破壊）
     async function fetchBinaryWithRetry(url, retries = 3) {
       for (let i = 0; i < retries; i++) {
         try {
@@ -198,17 +151,13 @@ app.post("/clip", async (req, res) => {
             headers: {
               "User-Agent": "Mozilla/5.0",
               "Accept": "*/*",
-
-              // ★ Cloudflare / GitHub Raw キャッシュ破壊
               "Cache-Control": "no-cache, no-store, must-revalidate",
               "Pragma": "no-cache",
               "Expires": "0"
             }
           });
 
-          if (!res.ok) {
-            throw new Error(`HTTP ${res.status}`);
-          }
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
           return Buffer.from(await res.arrayBuffer());
         } catch (err) {
@@ -219,12 +168,7 @@ app.post("/clip", async (req, res) => {
       }
     }
 
-    // ------------------------------
-    // ★ FFmpeg ジョブ本体
-    // ------------------------------
     const clipBuffer = await enqueueFfmpegJob(async () => {
-
-      // ---- ダウンロード（キャッシュ破壊済み） ----
       fs.writeFileSync(bgPath, await fetchBinaryWithRetry(bgDownloadUrl));
       fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrlWithBust));
       fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitleDownloadUrl));
@@ -237,7 +181,7 @@ app.post("/clip", async (req, res) => {
         });
       });
 
-      // ---- 背景を A で切る（仮） ----
+      // ---- 背景を A で切る ----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgPath)
@@ -247,7 +191,7 @@ app.post("/clip", async (req, res) => {
           .on("error", reject);
       });
 
-      // ---- ① 仮クリップ生成（Aで切った背景） ----
+      // ---- 仮クリップ生成（A） ----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgTrimmedA)
@@ -256,14 +200,12 @@ app.post("/clip", async (req, res) => {
           .complexFilter([
             { filter: "setpts", options: "PTS-STARTPTS", inputs: "0:v", outputs: "bg_reset" },
             { filter: "asetpts", options: "PTS-STARTPTS", inputs: "1:a", outputs: "audio_reset" },
-
             {
               filter: "overlay",
               inputs: ["bg_reset", "2:v"],
               options: { x: "(W-w)/2", y: "(H-h)/2" },
               outputs: "video_overlaid",
             },
-
             { filter: "setpts", options: "PTS-STARTPTS", inputs: "video_overlaid", outputs: "video_fixed" },
             { filter: "asetpts", options: "PTS-STARTPTS", inputs: "audio_reset", outputs: "audio_fixed" },
           ])
@@ -298,7 +240,7 @@ app.post("/clip", async (req, res) => {
           .on("error", reject);
       });
 
-      // ---- ② 本番クリップ生成（背景をBに強制） ----
+      // ---- 本番クリップ生成（背景B） ----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgTrimmedB)
@@ -307,14 +249,12 @@ app.post("/clip", async (req, res) => {
           .complexFilter([
             { filter: "setpts", options: "PTS-STARTPTS", inputs: "0:v", outputs: "bg_reset" },
             { filter: "asetpts", options: "PTS-STARTPTS", inputs: "1:a", outputs: "audio_reset" },
-
             {
               filter: "overlay",
               inputs: ["bg_reset", "2:v"],
               options: { x: "(W-w)/2", y: "(H-h)/2" },
               outputs: "video_overlaid",
             },
-
             { filter: "setpts", options: "PTS-STARTPTS", inputs: "video_overlaid", outputs: "video_fixed" },
             { filter: "asetpts", options: "PTS-STARTPTS", inputs: "audio_reset", outputs: "audio_fixed" },
           ])
@@ -332,7 +272,7 @@ app.post("/clip", async (req, res) => {
           .on("error", reject);
       });
 
-      // ---- ③ 正規化 ----
+      // ---- 正規化 ----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(clipB)
@@ -350,7 +290,7 @@ app.post("/clip", async (req, res) => {
 
       const file = fs.readFileSync(clipNormalized);
 
-      // ---- Cleanup ----
+      // Cleanup
       for (const p of [
         bgPath, bgTrimmedA, bgTrimmedB,
         audioPath, subtitlePath,
@@ -383,7 +323,13 @@ app.post("/final-render-url", async (req, res) => {
     }
 
     const jobId = uuidv4();
-    jobs[jobId] = { status: "processing", outputPath: null, errorMessage: null };
+    jobs[jobId] = {
+      status: "processing",
+      currentStep: "queued",
+      progress: 0,
+      outputPath: null,
+      errorMessage: null
+    };
 
     console.log(`Final render job registered: ${jobId}`);
 
@@ -392,11 +338,13 @@ app.post("/final-render-url", async (req, res) => {
         console.error("FINAL RENDER JOB ERROR (queued):", err);
         if (jobs[jobId]) {
           jobs[jobId].status = "error";
+          jobs[jobId].currentStep = "error";
+          jobs[jobId].progress = 0;
           jobs[jobId].errorMessage = err.message || String(err);
         }
       });
 
-    res.json({ jobId, status: "processing" });
+    res.json({ jobId, status: "processing", currentStep: "queued", progress: 0 });
 
   } catch (err) {
     console.error("SERVER ERROR (/final-render-url):", err);
@@ -436,7 +384,6 @@ app.get("/final-render-status", (req, res) => {
     });
   }
 
-  // processing
   res.json({
     jobId,
     status: job.status,
@@ -445,64 +392,101 @@ app.get("/final-render-status", (req, res) => {
   });
 });
 
+// ------------------------------
+// 新しい最終レンダー（concat filter + ffprobe + 再エンコード + 進捗）
+// ------------------------------
+async function processFinalRenderJob(jobId, clips) {
+  console.log(`Processing final render job (concat filter): ${jobId}`);
 
-// ------------------------------
-// processFinalRenderJob（進捗付き）
-// ------------------------------
-async function processFinalRenderJob(jobId, clips, outputPath) {
+  const id = uuidv4();
+  const filterList = [];
+  const finalOutput = `/tmp/final-${id}.mp4`;
+
   try {
     // 10%
     jobs[jobId].currentStep = "downloading clips";
     jobs[jobId].progress = 10;
 
-    const downloaded = await Promise.all(
-      clips.map(url => downloadToTmp(url))
-    );
+    const cacheBust = `?v=${Date.now()}&cb=${Math.random()}&nocache=1`;
 
-    // 40%
-    jobs[jobId].currentStep = "preparing concat list";
-    jobs[jobId].progress = 40;
+    for (const clip of clips) {
+      const localPath = `/tmp/clip-${uuidv4()}.mp4`;
+      const clipDownloadUrl = clip.clipUrl + cacheBust;
 
-    const concatList = downloaded.map(f => `file '${f}'`).join("\n");
-    const listPath = `/tmp/concat_${jobId}.txt`;
-    fs.writeFileSync(listPath, concatList);
+      await downloadToTmp(clipDownloadUrl, localPath);
 
-    // 55%
+      // 30%
+      jobs[jobId].currentStep = "probing streams";
+      jobs[jobId].progress = 30;
+
+      const probe = await new Promise((resolve, reject) => {
+        ffmpeg.ffprobe(localPath, (err, data) => {
+          if (err) reject(err);
+          else resolve(data);
+        });
+      });
+
+      const videoStream = probe.streams.find(s => s.codec_type === "video");
+      const audioStream = probe.streams.find(s => s.codec_type === "audio");
+
+      if (!videoStream) throw new Error(`Video stream missing: ${clip.clipUrl}`);
+      if (!audioStream) throw new Error(`Audio stream missing: ${clip.clipUrl}`);
+
+      filterList.push({
+        path: localPath,
+        v: videoStream.index,
+        a: audioStream.index
+      });
+    }
+
+    // 50%
+    jobs[jobId].currentStep = "building filter graph";
+    jobs[jobId].progress = 50;
+
+    const ff = ffmpeg();
+    filterList.forEach((c) => ff.input(c.path));
+
+    const filterComplex =
+      filterList.map((c, i) => `[${i}:v][${i}:a]`).join("") +
+      `concat=n=${filterList.length}:v=1:a=1[v][a]`;
+
+    // 70%
     jobs[jobId].currentStep = "concatenating video";
-    jobs[jobId].progress = 55;
+    jobs[jobId].progress = 70;
 
-    const finalOutput = `/tmp/final_${jobId}.mp4`;
-
-    await execPromise(
-      `ffmpeg -y -f concat -safe 0 -i ${listPath} -c copy ${finalOutput}`
-    );
-
-    // 75%
-    jobs[jobId].currentStep = "normalizing audio";
-    jobs[jobId].progress = 75;
-
-    const normalizedOutput = `/tmp/final_norm_${jobId}.mp4`;
-
-    await execPromise(
-      `ffmpeg -y -i ${finalOutput} -af loudnorm ${normalizedOutput}`
-    );
+    await new Promise((resolve, reject) => {
+      ff
+        .complexFilter(filterComplex)
+        .outputOptions([
+          "-map [v]",
+          "-map [a]",
+          "-c:v libx264",
+          "-preset veryfast",
+          "-crf 23",
+          "-c:a aac",
+          "-b:a 192k",
+          "-movflags +faststart"
+        ])
+        .save(finalOutput)
+        .on("end", resolve)
+        .on("error", reject);
+    });
 
     // 90%
     jobs[jobId].currentStep = "uploading to GitHub";
     jobs[jobId].progress = 90;
 
-    const uploadedUrl = await uploadToGitHub(
-      normalizedOutput,
-      `final/${jobId}.mp4`
-    );
+    const uploadedUrl = await uploadToGitHub(finalOutput, `final/${jobId}.mp4`);
 
-    // 完了
     jobs[jobId].status = "done";
     jobs[jobId].currentStep = "completed";
     jobs[jobId].progress = 100;
     jobs[jobId].outputPath = uploadedUrl;
 
+    console.log(`Final render job completed: ${jobId}`);
+
   } catch (err) {
+    console.error("FINAL RENDER JOB ERROR:", err);
     jobs[jobId].status = "error";
     jobs[jobId].currentStep = "error";
     jobs[jobId].progress = 0;
@@ -510,6 +494,29 @@ async function processFinalRenderJob(jobId, clips, outputPath) {
   }
 }
 
+// ------------------------------
+// GET /final-result/:jobId
+// ------------------------------
+app.get("/final-result/:jobId", (req, res) => {
+  const { jobId } = req.params;
+
+  if (!jobs[jobId] || jobs[jobId].status !== "done") {
+    return res.status(404).json({ error: "Not ready" });
+  }
+
+  const filePath = jobs[jobId].outputPath;
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: "File missing" });
+  }
+
+  const stat = fs.statSync(filePath);
+  res.setHeader("Content-Type", "video/mp4");
+  res.setHeader("Content-Length", stat.size);
+  res.setHeader("Accept-Ranges", "bytes");
+
+  res.sendFile(filePath);
+});
 
 // ------------------------------
 // POST /bgm-mix
@@ -552,211 +559,8 @@ app.post("/bgm-mix", async (req, res) => {
   }
 });
 
-
 // ------------------------------
-// processBgmMixJob（進捗付き）
-// ------------------------------
-async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
-  try {
-    // 20%
-    jobs[jobId].currentStep = "downloading video & bgm";
-    jobs[jobId].progress = 20;
-
-    const videoPath = await downloadToTmp(finalVideoUrl);
-    const bgmPath = await downloadToTmp(bgmUrl);
-
-    // 60%
-    jobs[jobId].currentStep = "mixing audio";
-    jobs[jobId].progress = 60;
-
-    const mixedOutput = `/tmp/bgm_mix_${jobId}.mp4`;
-
-    await execPromise(
-      `ffmpeg -y -i ${videoPath} -i ${bgmPath} -filter_complex "[1:a]volume=0.15[a1];[0:a][a1]amix=inputs=2:duration=first" -c:v copy -c:a aac ${mixedOutput}`
-    );
-
-    // 90%
-    jobs[jobId].currentStep = "uploading to GitHub";
-    jobs[jobId].progress = 90;
-
-    const uploadedUrl = await uploadToGitHub(
-      mixedOutput,
-      `bgm/${jobId}.mp4`
-    );
-
-    // 完了
-    jobs[jobId].status = "done";
-    jobs[jobId].currentStep = "completed";
-    jobs[jobId].progress = 100;
-    jobs[jobId].outputPath = uploadedUrl;
-
-  } catch (err) {
-    jobs[jobId].status = "error";
-    jobs[jobId].currentStep = "error";
-    jobs[jobId].progress = 0;
-    jobs[jobId].errorMessage = err.message || String(err);
-  }
-}
-
-
-// ------------------------------
-// GET /bgm-mix-status
-// ------------------------------
-app.get("/bgm-mix-status", (req, res) => {
-  const { jobId } = req.query;
-
-  if (!jobId || !jobs[jobId]) {
-    return res.status(404).json({ error: "Invalid jobId" });
-  }
-
-  const job = jobs[jobId];
-
-  if (job.status === "error") {
-    return res.json({
-      jobId,
-      status: "error",
-      currentStep: job.currentStep || null,
-      progress: job.progress || 0,
-      errorMessage: job.errorMessage || "Unknown error"
-    });
-  }
-
-  if (job.status === "done") {
-    return res.json({
-      jobId,
-      status: "done",
-      currentStep: "completed",
-      progress: 100,
-      url: `/final-result/${jobId}`,
-    });
-  }
-
-  // processing
-  res.json({
-    jobId,
-    status: job.status,
-    currentStep: job.currentStep || "processing",
-    progress: job.progress || 0
-  });
-});
-
-
-// ------------------------------
-// GET /final-result/:jobId
-// ------------------------------
-app.get("/final-result/:jobId", (req, res) => {
-  const { jobId } = req.params;
-
-  if (!jobs[jobId] || jobs[jobId].status !== "done") {
-    return res.status(404).json({ error: "Not ready" });
-  }
-
-  const filePath = jobs[jobId].outputPath;
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: "File missing" });
-  }
-
-  const stat = fs.statSync(filePath);
-  res.setHeader("Content-Type", "video/mp4");
-  res.setHeader("Content-Length", stat.size);
-  res.setHeader("Accept-Ranges", "bytes");
-
-  res.sendFile(filePath);
-});
-
-// ------------------------------
-// 最終レンダー（ロングエスト基準 / concat filter / ffprobeでストリーム番号取得）
-// ------------------------------
-async function processFinalRenderJob(jobId, clips) {
-  console.log(`Processing final render job (longest-PTS mode): ${jobId}`);
-
-  const id = uuidv4();
-  const filterList = [];
-  const finalOutput = `/tmp/final-${id}.mp4`;
-
-  try {
-    // ★ キャッシュバスター強化
-    const cacheBust = `?v=${Date.now()}&cb=${Math.random()}&nocache=1`;
-
-    for (const clip of clips) {
-      const localPath = `/tmp/clip-${uuidv4()}.mp4`;
-      const clipDownloadUrl = clip.clipUrl + cacheBust;
-
-      // クリップをダウンロード
-      await downloadToTmp(clipDownloadUrl, localPath);
-
-      // ★ ffprobe でストリーム番号を取得
-      const probe = await new Promise((resolve, reject) => {
-        ffmpeg.ffprobe(localPath, (err, data) => {
-          if (err) reject(err);
-          else resolve(data);
-        });
-      });
-
-      const videoStream = probe.streams.find(s => s.codec_type === "video");
-      const audioStream = probe.streams.find(s => s.codec_type === "audio");
-
-      if (!videoStream) {
-        throw new Error(`Video stream missing in clip: ${clip.clipUrl}`);
-      }
-      if (!audioStream) {
-        throw new Error(`Audio stream missing in clip: ${clip.clipUrl}`);
-      }
-
-      filterList.push({
-        path: localPath,
-        v: videoStream.index,
-        a: audioStream.index
-      });
-    }
-
-    // ffmpeg filter_complex の入力を構築
-    const ff = ffmpeg();
-    filterList.forEach((c) => ff.input(c.path));
-
-    // ★ filterComplex を完全1行で生成
-    const filterComplex =
-      filterList.map((c, i) => `[${i}:v][${i}:a]`).join("") +
-      `concat=n=${filterList.length}:v=1:a=1[v][a]`;
-
-    await new Promise((resolve, reject) => {
-      ff
-        .complexFilter(filterComplex)
-        .outputOptions([
-          "-map [v]",
-          "-map [a]",
-
-          // ★ copy を禁止 → 再エンコードで安定化
-          "-c:v libx264",
-          "-preset veryfast",
-          "-crf 23",
-
-          "-c:a aac",
-          "-b:a 192k",
-
-          "-movflags +faststart"
-        ])
-        .save(finalOutput)
-        .on("end", resolve)
-        .on("error", reject);
-    });
-
-    jobs[jobId].status = "done";
-    jobs[jobId].outputPath = finalOutput;
-
-    console.log(`Final render job completed (longest-PTS mode): ${jobId}`);
-
-  } catch (err) {
-    console.error("FINAL RENDER JOB ERROR:", err);
-    jobs[jobId].status = "error";
-    jobs[jobId].errorMessage = err.message || String(err);
-    return;
-  }
-}
-
-// ------------------------------
-// BGM ミックス処理（音量調整 + フェードアウト付き）
+// BGM ミックス処理（音量調整 + フェードアウト付き + 進捗）
 // ------------------------------
 async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
   console.log(`Processing BGM mix job: ${jobId}`);
@@ -767,10 +571,17 @@ async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
   const outputPath = `/tmp/bgm-final-${id}.mp4`;
 
   try {
+    // 20%
+    jobs[jobId].currentStep = "downloading video & bgm";
+    jobs[jobId].progress = 20;
+
     await downloadToTmp(finalVideoUrl, videoPath);
     await downloadToTmp(bgmUrl, bgmPath);
 
-    // Final video duration を取得（フェードアウトに必要）
+    // 40%
+    jobs[jobId].currentStep = "probing video duration";
+    jobs[jobId].progress = 40;
+
     const videoDuration = await new Promise((resolve, reject) => {
       ffmpeg.ffprobe(videoPath, (err, metadata) => {
         if (err) reject(err);
@@ -779,6 +590,10 @@ async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
     });
 
     const fadeStart = Math.max(videoDuration - 1, 0); // 最後の1秒でフェードアウト
+
+    // 60%
+    jobs[jobId].currentStep = "mixing audio";
+    jobs[jobId].progress = 60;
 
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -815,14 +630,21 @@ async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
           "-map 0:v",     // 元の映像
           "-map [aout]",  // ミックス後の音声
           "-c:v copy",
-          "-c:a aac"
+          "-c:a aac",
+          "-movflags +faststart"
         ])
         .save(outputPath)
         .on("end", resolve)
         .on("error", reject);
     });
 
+    // 90%
+    jobs[jobId].currentStep = "finalizing bgm mix";
+    jobs[jobId].progress = 90;
+
     jobs[jobId].status = "done";
+    jobs[jobId].currentStep = "completed";
+    jobs[jobId].progress = 100;
     jobs[jobId].outputPath = outputPath;
 
     console.log(`BGM mix job completed: ${jobId}`);
@@ -830,12 +652,54 @@ async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
   } catch (err) {
     console.error("BGM MIX JOB ERROR:", err);
     jobs[jobId].status = "error";
-    throw err;
+    jobs[jobId].currentStep = "error";
+    jobs[jobId].progress = 0;
+    jobs[jobId].errorMessage = err.message || String(err);
   }
 }
 
 // ------------------------------
-// PORT
+// GET /bgm-mix-status
+// ------------------------------
+app.get("/bgm-mix-status", (req, res) => {
+  const { jobId } = req.query;
+
+  if (!jobId || !jobs[jobId]) {
+    return res.status(404).json({ error: "Invalid jobId" });
+  }
+
+  const job = jobs[jobId];
+
+  if (job.status === "error") {
+    return res.json({
+      jobId,
+      status: "error",
+      currentStep: job.currentStep || null,
+      progress: job.progress || 0,
+      errorMessage: job.errorMessage || "Unknown error"
+    });
+  }
+
+  if (job.status === "done") {
+    return res.json({
+      jobId,
+      status: "done",
+      currentStep: "completed",
+      progress: 100,
+      url: `/final-result/${jobId}`,
+    });
+  }
+
+  res.json({
+    jobId,
+    status: job.status,
+    currentStep: job.currentStep || "processing",
+    progress: job.progress || 0
+  });
+});
+
+// ------------------------------
+// ポート起動
 // ------------------------------
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => {
