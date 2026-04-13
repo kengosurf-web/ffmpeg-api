@@ -99,248 +99,118 @@ app.get("/health", (req, res) => {
 const jobs = {};
 
 // ------------------------------
-// /clip（1文クリップ生成API）
+// /clip（最軽量 A 切り版）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
     const { subtitlePng, audioUrl, backgroundVideo } = req.body;
 
-    if (!subtitlePng || !audioUrl || !backgroundVideo) {
-      return res.status(400).json({
-        error: "Missing subtitlePng, audioUrl, or backgroundVideo",
-      });
-    }
-
-    console.log("Generating 1-sentence clip (冷静ミニマム版)...");
-
     const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
     const bgPath = `/tmp/bg-${unique}.mp4`;
-    const bgClean = `/tmp/bgC-${unique}.mp4`;
-    const bgTrimmedA = `/tmp/bgA-${unique}.mp4`;
-    const bgTrimmedB = `/tmp/bgB-${unique}.mp4`;
+    const bgA = `/tmp/bgA-${unique}.mp4`;
 
     const audioPath = `/tmp/audio-${unique}.mp3`;
-    const audioFixedPath = `/tmp/audioF-${unique}.m4a`;
+    const audioFixed = `/tmp/audioF-${unique}.m4a`;
     const subtitlePath = `/tmp/sub-${unique}.png`;
 
-    const clipA = `/tmp/clipA-${unique}.mp4`;
-    const clipB = `/tmp/clipB-${unique}.mp4`;
-    const clipNormalized = `/tmp/clipN-${unique}.mp4`;
+    const clip = `/tmp/clip-${unique}.mp4`;
+    const clipFast = `/tmp/clipF-${unique}.mp4`;
 
-    // GitHub Raw URL 変換
-    let audioDownloadUrl = audioUrl;
-    if (audioUrl.includes("api.github.com")) {
-      audioDownloadUrl = audioUrl
-        .replace("api.github.com/repos", "raw.githubusercontent.com")
-        .replace("/contents/", "/")
-        .replace("?ref=main", "");
-    }
+    // ダウンロード
+    fs.writeFileSync(bgPath, await fetchBinaryWithRetry(backgroundVideo));
+    fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioUrl));
+    fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitlePng));
 
-    const cacheBust = `?v=${Date.now()}&cb=${Math.random()}&nocache=1`;
-
-    const bgDownloadUrl = backgroundVideo + cacheBust;
-    const audioDownloadUrlWithBust = audioDownloadUrl + cacheBust;
-    const subtitleDownloadUrl = subtitlePng + cacheBust;
-
-    // fetchBinaryWithRetry
-    async function fetchBinaryWithRetry(url, retries = 3) {
-      for (let i = 0; i < retries; i++) {
-        try {
-          const res = await fetch(url, {
-            method: "GET",
-            redirect: "follow",
-            headers: {
-              "User-Agent": "Mozilla/5.0",
-              "Accept": "*/*",
-              "Cache-Control": "no-cache, no-store, must-revalidate",
-              "Pragma": "no-cache",
-              "Expires": "0"
-            }
-          });
-
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-          return Buffer.from(await res.arrayBuffer());
-        } catch (err) {
-          console.error(`fetchBinaryWithRetry failed (${i + 1}/${retries}):`, err);
-          if (i === retries - 1) throw err;
-          await new Promise(r => setTimeout(r, 300));
-        }
-      }
-    }
-
-    const clipBuffer = await enqueueFfmpegJob(async () => {
-      fs.writeFileSync(bgPath, await fetchBinaryWithRetry(bgDownloadUrl));
-      fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrlWithBust));
-      fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitleDownloadUrl));
-
-      // ----------------------------------------------------
-      // 背景動画のストリーム最小除去（冷静版）
-      // 映像だけ残す、音声だけ消す。他は触らない。
-      // ----------------------------------------------------
-      await new Promise((resolve, reject) => {
-        ffmpeg()
-          .input(bgPath)
-          .outputOptions([
-            "-map 0:v",      // 映像は全部拾う
-            "-an",           // 音声だけ消す
-            "-c:v libx264",  // 再エンコード（copyしない）
-            "-pix_fmt yuv420p"
-          ])
-          .save(bgClean)
-          .on("end", resolve)
-          .on("error", reject);
-      });
-
-      // ----------------------------------------------------
-      // MP3 → AAC 安定化
-      // ----------------------------------------------------
-      await new Promise((resolve, reject) => {
-        ffmpeg()
-          .input(audioPath)
-          .audioCodec("aac")
-          .audioFrequency(48000)
-          .audioChannels(2)
-          .outputOptions(["-movflags +faststart"])
-          .save(audioFixedPath)
-          .on("end", resolve)
-          .on("error", reject);
-      });
-
-      // ---- 音声の duration（A） ----
-      const audioDurationA = await new Promise((resolve, reject) => {
-        ffmpeg.ffprobe(audioFixedPath, (err, metadata) => {
-          if (err) reject(err);
-          else resolve(metadata.format.duration);
-        });
-      });
-
-      // ---- 背景を A で切る ----
-      await new Promise((resolve, reject) => {
-        ffmpeg()
-          .input(bgClean)
-          .outputOptions([`-t ${audioDurationA}`, "-c copy"])
-          .save(bgTrimmedA)
-          .on("end", resolve)
-          .on("error", reject);
-      });
-
-      // ---- 仮クリップ生成（A基準）----
-      await new Promise((resolve, reject) => {
-        ffmpeg()
-          .input(bgTrimmedA)
-          .input(audioFixedPath)
-          .input(subtitlePath)
-          .complexFilter([
-            {
-              filter: "overlay",
-              inputs: ["0:v", "2:v"],
-              options: { x: "(W-w)/2", y: "(H-h)/2" },
-              outputs: "video_overlaid",
-            }
-          ])
-          .outputOptions([
-            "-map [video_overlaid]",
-            "-map 1:a",
-            "-c:v libx264",
-            "-preset ultrafast",
-            "-c:a aac",
-            "-pix_fmt yuv420p",
-          ])
-          .save(clipA)
-          .on("end", resolve)
-          .on("error", reject);
-      });
-
-      // ---- 仮クリップの実長（B） ----
-      let durationB = await new Promise((resolve, reject) => {
-        ffmpeg.ffprobe(clipA, (err, metadata) => {
-          if (err) reject(err);
-          else resolve(metadata.format.duration);
-        });
-      });
-
-      durationB = Number(durationB.toFixed(3));
-
-      // ---- 背景を B で切り直す ----
-      await new Promise((resolve, reject) => {
-        ffmpeg()
-          .input(bgClean)
-          .outputOptions([`-t ${durationB}`, "-c copy"])
-          .save(bgTrimmedB)
-          .on("end", resolve)
-          .on("error", reject);
-      });
-
-      // ---- 本番クリップ生成（PTSリセット1回）----
-      await new Promise((resolve, reject) => {
-        ffmpeg()
-          .input(bgTrimmedB)
-          .input(audioFixedPath)
-          .input(subtitlePath)
-          .complexFilter([
-            { filter: "setpts", options: "PTS-STARTPTS", inputs: "0:v", outputs: "bg_reset" },
-            { filter: "asetpts", options: "PTS-STARTPTS", inputs: "1:a", outputs: "audio_reset" },
-            {
-              filter: "overlay",
-              inputs: ["bg_reset", "2:v"],
-              options: { x: "(W-w)/2", y: "(H-h)/2" },
-              outputs: "video_overlaid",
-            }
-          ])
-          .outputOptions([
-            "-map [video_overlaid]",
-            "-map [audio_reset]",
-            "-c:v libx264",
-            "-preset ultrafast",
-            "-c:a aac",
-            "-pix_fmt yuv420p",
-            `-t ${durationB}`,
-          ])
-          .save(clipB)
-          .on("end", resolve)
-          .on("error", reject);
-      });
-
-      // ---- 正規化 ----
-      await new Promise((resolve, reject) => {
-        ffmpeg()
-          .input(clipB)
-          .outputOptions([
-            "-c:v libx264",
-            "-preset ultrafast",
-            "-c:a aac",
-            "-pix_fmt yuv420p",
-            "-movflags +faststart",
-          ])
-          .save(clipNormalized)
-          .on("end", resolve)
-          .on("error", reject);
-      });
-
-      const file = fs.readFileSync(clipNormalized);
-
-      // Cleanup
-      for (const p of [
-        bgPath, bgClean, bgTrimmedA, bgTrimmedB,
-        audioPath, audioFixedPath, subtitlePath,
-        clipA, clipB, clipNormalized
-      ]) {
-        try { fs.unlinkSync(p); } catch {}
-      }
-
-      return file;
+    // 音声を AAC に安定化
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(audioPath)
+        .audioCodec("aac")
+        .audioFrequency(48000)
+        .audioChannels(2)
+        .outputOptions(["-movflags +faststart"])
+        .save(audioFixed)
+        .on("end", resolve)
+        .on("error", reject);
     });
 
+    // A（音声の長さ）
+    const durationA = await new Promise((resolve, reject) => {
+      ffmpeg.ffprobe(audioFixed, (err, meta) => {
+        if (err) reject(err);
+        else resolve(meta.format.duration);
+      });
+    });
+
+    // 背景を A で切る（copy）
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(bgPath)
+        .outputOptions([`-t ${durationA}`, "-c copy"])
+        .save(bgA)
+        .on("end", resolve)
+        .on("error", reject);
+    });
+
+    // overlay（clip）
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(bgA)
+        .input(audioFixed)
+        .input(subtitlePath)
+        .complexFilter([
+          {
+            filter: "overlay",
+            inputs: ["0:v", "2:v"],
+            options: { x: "(W-w)/2", y: "(H-h)/2" },
+            outputs: "v"
+          }
+        ])
+        .outputOptions([
+          "-map [v]",
+          "-map 1:a",
+          "-c:v libx264",
+          "-preset ultrafast",
+          "-c:a aac",
+          "-pix_fmt yuv420p"
+        ])
+        .save(clip)
+        .on("end", resolve)
+        .on("error", reject);
+    });
+
+    // 正規化（faststart）
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(clip)
+        .outputOptions([
+          "-c:v libx264",
+          "-preset ultrafast",
+          "-c:a aac",
+          "-pix_fmt yuv420p",
+          "-movflags +faststart"
+        ])
+        .save(clipFast)
+        .on("end", resolve)
+        .on("error", reject);
+    });
+
+    const file = fs.readFileSync(clipFast);
+
+    // cleanup
+    for (const p of [bgPath, bgA, audioPath, audioFixed, subtitlePath, clip, clipFast]) {
+      try { fs.unlinkSync(p); } catch {}
+    }
+
     res.setHeader("Content-Type", "video/mp4");
-    res.send(clipBuffer);
+    res.send(file);
 
   } catch (err) {
-    console.error("SERVER ERROR (/clip):", err);
-    res.status(500).json({ error: err.message || "Server error" });
+    res.status(500).json({ error: err.message });
   }
 });
+
 
 // ------------------------------
 // POST /final-render-url
