@@ -676,14 +676,14 @@ async function processFinalRenderJob(jobId, clips) {
   const finalOutput = `/tmp/final-${id}.mp4`;
 
   try {
-    // ★ キャッシュバスター強化（複数パラメータ）
+    // ★ キャッシュバスター強化
     const cacheBust = `?v=${Date.now()}&cb=${Math.random()}&nocache=1`;
 
     for (const clip of clips) {
       const localPath = `/tmp/clip-${uuidv4()}.mp4`;
       const clipDownloadUrl = clip.clipUrl + cacheBust;
 
-      // クリップをダウンロード（downloadToTmp 側もキャッシュ破壊対応する）
+      // クリップをダウンロード
       await downloadToTmp(clipDownloadUrl, localPath);
 
       // ★ ffprobe でストリーム番号を取得
@@ -715,7 +715,7 @@ async function processFinalRenderJob(jobId, clips) {
     const ff = ffmpeg();
     filterList.forEach((c) => ff.input(c.path));
 
-    // ★ filterComplex を完全1行で生成（改行禁止）
+    // ★ filterComplex を完全1行で生成
     const filterComplex =
       filterList.map((c, i) => `[${i}:v][${i}:a]`).join("") +
       `concat=n=${filterList.length}:v=1:a=1[v][a]`;
@@ -726,9 +726,15 @@ async function processFinalRenderJob(jobId, clips) {
         .outputOptions([
           "-map [v]",
           "-map [a]",
+
+          // ★ copy を禁止 → 再エンコードで安定化
           "-c:v libx264",
           "-preset veryfast",
+          "-crf 23",
+
           "-c:a aac",
+          "-b:a 192k",
+
           "-movflags +faststart"
         ])
         .save(finalOutput)
