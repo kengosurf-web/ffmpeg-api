@@ -421,6 +421,7 @@ app.get("/final-render-status", (req, res) => {
       jobId,
       status: "error",
       currentStep: job.currentStep || null,
+      progress: job.progress || 0,
       errorMessage: job.errorMessage || "Unknown error"
     });
   }
@@ -430,6 +431,7 @@ app.get("/final-render-status", (req, res) => {
       jobId,
       status: "done",
       currentStep: "completed",
+      progress: 100,
       url: `/final-result/${jobId}`,
     });
   }
@@ -438,7 +440,8 @@ app.get("/final-render-status", (req, res) => {
   res.json({
     jobId,
     status: job.status,
-    currentStep: job.currentStep || "processing"
+    currentStep: job.currentStep || "processing",
+    progress: job.progress || 0
   });
 });
 
@@ -458,6 +461,7 @@ app.post("/bgm-mix", async (req, res) => {
     jobs[jobId] = { 
       status: "processing", 
       currentStep: "queued",
+      progress: 0,
       outputPath: null, 
       errorMessage: null 
     };
@@ -470,11 +474,12 @@ app.post("/bgm-mix", async (req, res) => {
         if (jobs[jobId]) {
           jobs[jobId].status = "error";
           jobs[jobId].currentStep = "error";
+          jobs[jobId].progress = 0;
           jobs[jobId].errorMessage = err.message || String(err);
         }
       });
 
-    res.json({ jobId, status: "processing", currentStep: "queued" });
+    res.json({ jobId, status: "processing", currentStep: "queued", progress: 0 });
 
   } catch (err) {
     console.error("SERVER ERROR (/bgm-mix):", err);
@@ -500,6 +505,7 @@ app.get("/bgm-mix-status", (req, res) => {
       jobId,
       status: "error",
       currentStep: job.currentStep || null,
+      progress: job.progress || 0,
       errorMessage: job.errorMessage || "Unknown error"
     });
   }
@@ -509,6 +515,7 @@ app.get("/bgm-mix-status", (req, res) => {
       jobId,
       status: "done",
       currentStep: "completed",
+      progress: 100,
       url: `/final-result/${jobId}`,
     });
   }
@@ -517,10 +524,10 @@ app.get("/bgm-mix-status", (req, res) => {
   res.json({
     jobId,
     status: job.status,
-    currentStep: job.currentStep || "processing"
+    currentStep: job.currentStep || "processing",
+    progress: job.progress || 0
   });
 });
-
 
 // ------------------------------
 // GET /final-result/:jobId
