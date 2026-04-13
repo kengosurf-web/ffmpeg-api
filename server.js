@@ -119,7 +119,8 @@ app.post("/clip", async (req, res) => {
     const bgTrimmedA = `/tmp/bgA-${unique}.mp4`;
     const bgTrimmedB = `/tmp/bgB-${unique}.mp4`;
 
-    const audioPath = `/tmp/audio-${unique}.mp3`;
+    const audioPath = `/tmp/audio-${unique}.mp3`;          // TTS MP3
+    const audioFixedPath = `/tmp/audioF-${unique}.m4a`;    // ← 安定化 AAC
     const subtitlePath = `/tmp/sub-${unique}.png`;
 
     const clipA = `/tmp/clipA-${unique}.mp4`;
@@ -173,9 +174,24 @@ app.post("/clip", async (req, res) => {
       fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioDownloadUrlWithBust));
       fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitleDownloadUrl));
 
+      // ----------------------------------------------------
+      // ★ 追加：MP3 → AAC へ安定化（ここが今回の決定的修正）
+      // ----------------------------------------------------
+      await new Promise((resolve, reject) => {
+        ffmpeg()
+          .input(audioPath)
+          .audioCodec("aac")
+          .audioFrequency(48000)
+          .audioChannels(2)
+          .outputOptions(["-movflags +faststart"])
+          .save(audioFixedPath)
+          .on("end", resolve)
+          .on("error", reject);
+      });
+
       // ---- 音声の duration（A） ----
       const audioDurationA = await new Promise((resolve, reject) => {
-        ffmpeg.ffprobe(audioPath, (err, metadata) => {
+        ffmpeg.ffprobe(audioFixedPath, (err, metadata) => {
           if (err) reject(err);
           else resolve(metadata.format.duration);
         });
@@ -195,7 +211,7 @@ app.post("/clip", async (req, res) => {
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgTrimmedA)
-          .input(audioPath)
+          .input(audioFixedPath)   // ← 安定化音声を使用
           .input(subtitlePath)
           .complexFilter([
             { filter: "setpts", options: "PTS-STARTPTS", inputs: "0:v", outputs: "bg_reset" },
@@ -244,7 +260,7 @@ app.post("/clip", async (req, res) => {
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgTrimmedB)
-          .input(audioPath)
+          .input(audioFixedPath)   // ← 安定化音声を使用
           .input(subtitlePath)
           .complexFilter([
             { filter: "setpts", options: "PTS-STARTPTS", inputs: "0:v", outputs: "bg_reset" },
@@ -293,7 +309,7 @@ app.post("/clip", async (req, res) => {
       // Cleanup
       for (const p of [
         bgPath, bgTrimmedA, bgTrimmedB,
-        audioPath, subtitlePath,
+        audioPath, audioFixedPath, subtitlePath,
         clipA, clipB, clipNormalized
       ]) {
         try { fs.unlinkSync(p); } catch {}
