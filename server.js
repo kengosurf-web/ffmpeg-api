@@ -111,7 +111,7 @@ app.post("/clip", async (req, res) => {
       });
     }
 
-    console.log("Generating 1-sentence clip (perfect sync, force-B background)...");
+    console.log("Generating 1-sentence clip (A基準・PTS1回・concat寛容ルート)...");
 
     const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
@@ -119,8 +119,8 @@ app.post("/clip", async (req, res) => {
     const bgTrimmedA = `/tmp/bgA-${unique}.mp4`;
     const bgTrimmedB = `/tmp/bgB-${unique}.mp4`;
 
-    const audioPath = `/tmp/audio-${unique}.mp3`;          // TTS MP3
-    const audioFixedPath = `/tmp/audioF-${unique}.m4a`;    // ← 安定化 AAC
+    const audioPath = `/tmp/audio-${unique}.mp3`;
+    const audioFixedPath = `/tmp/audioF-${unique}.m4a`;
     const subtitlePath = `/tmp/sub-${unique}.png`;
 
     const clipA = `/tmp/clipA-${unique}.mp4`;
@@ -142,7 +142,7 @@ app.post("/clip", async (req, res) => {
     const audioDownloadUrlWithBust = audioDownloadUrl + cacheBust;
     const subtitleDownloadUrl = subtitlePng + cacheBust;
 
-    // fetchBinaryWithRetry（キャッシュ破壊）
+    // fetchBinaryWithRetry
     async function fetchBinaryWithRetry(url, retries = 3) {
       for (let i = 0; i < retries; i++) {
         try {
@@ -175,7 +175,7 @@ app.post("/clip", async (req, res) => {
       fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitleDownloadUrl));
 
       // ----------------------------------------------------
-      // ★ 追加：MP3 → AAC へ安定化（ここが今回の決定的修正）
+      // MP3 → AAC 安定化
       // ----------------------------------------------------
       await new Promise((resolve, reject) => {
         ffmpeg()
@@ -197,7 +197,7 @@ app.post("/clip", async (req, res) => {
         });
       });
 
-      // ---- 背景を A で切る ----
+      // ---- 背景を A で切る（最大ズレ防止）----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgPath)
@@ -207,27 +207,23 @@ app.post("/clip", async (req, res) => {
           .on("error", reject);
       });
 
-      // ---- 仮クリップ生成（A） ----
+      // ---- 仮クリップ生成（A基準・PTSリセットなし）----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgTrimmedA)
-          .input(audioFixedPath)   // ← 安定化音声を使用
+          .input(audioFixedPath)
           .input(subtitlePath)
           .complexFilter([
-            { filter: "setpts", options: "PTS-STARTPTS", inputs: "0:v", outputs: "bg_reset" },
-            { filter: "asetpts", options: "PTS-STARTPTS", inputs: "1:a", outputs: "audio_reset" },
             {
               filter: "overlay",
-              inputs: ["bg_reset", "2:v"],
+              inputs: ["0:v", "2:v"],
               options: { x: "(W-w)/2", y: "(H-h)/2" },
               outputs: "video_overlaid",
-            },
-            { filter: "setpts", options: "PTS-STARTPTS", inputs: "video_overlaid", outputs: "video_fixed" },
-            { filter: "asetpts", options: "PTS-STARTPTS", inputs: "audio_reset", outputs: "audio_fixed" },
+            }
           ])
           .outputOptions([
-            "-map [video_fixed]",
-            "-map [audio_fixed]",
+            "-map [video_overlaid]",
+            "-map 1:a",
             "-c:v libx264",
             "-preset ultrafast",
             "-c:a aac",
@@ -239,12 +235,15 @@ app.post("/clip", async (req, res) => {
       });
 
       // ---- 仮クリップの実長（B） ----
-      const durationB = await new Promise((resolve, reject) => {
+      let durationB = await new Promise((resolve, reject) => {
         ffmpeg.ffprobe(clipA, (err, metadata) => {
           if (err) reject(err);
           else resolve(metadata.format.duration);
         });
       });
+
+      // ---- B を丸める（concat安定化）----
+      durationB = Number(durationB.toFixed(3));
 
       // ---- 背景を B で切り直す ----
       await new Promise((resolve, reject) => {
@@ -256,11 +255,11 @@ app.post("/clip", async (req, res) => {
           .on("error", reject);
       });
 
-      // ---- 本番クリップ生成（背景B） ----
+      // ---- 本番クリップ生成（PTSリセットはここで1回だけ）----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgTrimmedB)
-          .input(audioFixedPath)   // ← 安定化音声を使用
+          .input(audioFixedPath)
           .input(subtitlePath)
           .complexFilter([
             { filter: "setpts", options: "PTS-STARTPTS", inputs: "0:v", outputs: "bg_reset" },
@@ -270,13 +269,11 @@ app.post("/clip", async (req, res) => {
               inputs: ["bg_reset", "2:v"],
               options: { x: "(W-w)/2", y: "(H-h)/2" },
               outputs: "video_overlaid",
-            },
-            { filter: "setpts", options: "PTS-STARTPTS", inputs: "video_overlaid", outputs: "video_fixed" },
-            { filter: "asetpts", options: "PTS-STARTPTS", inputs: "audio_reset", outputs: "audio_fixed" },
+            }
           ])
           .outputOptions([
-            "-map [video_fixed]",
-            "-map [audio_fixed]",
+            "-map [video_overlaid]",
+            "-map [audio_reset]",
             "-c:v libx264",
             "-preset ultrafast",
             "-c:a aac",
@@ -326,6 +323,7 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
+
 
 // ------------------------------
 // POST /final-render-url
