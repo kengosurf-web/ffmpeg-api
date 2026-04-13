@@ -111,11 +111,12 @@ app.post("/clip", async (req, res) => {
       });
     }
 
-    console.log("Generating 1-sentence clip (A基準・PTS1回・背景音声完全封鎖)...");
+    console.log("Generating 1-sentence clip (背景ストリーム完全除去版)...");
 
     const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
     const bgPath = `/tmp/bg-${unique}.mp4`;
+    const bgClean = `/tmp/bgC-${unique}.mp4`;       // ←背景ストリーム完全除去版
     const bgTrimmedA = `/tmp/bgA-${unique}.mp4`;
     const bgTrimmedB = `/tmp/bgB-${unique}.mp4`;
 
@@ -175,6 +176,27 @@ app.post("/clip", async (req, res) => {
       fs.writeFileSync(subtitlePath, await fetchBinaryWithRetry(subtitleDownloadUrl));
 
       // ----------------------------------------------------
+      // 背景動画のストリーム完全除去（映像1本だけにする）
+      // ----------------------------------------------------
+      await new Promise((resolve, reject) => {
+        ffmpeg()
+          .input(bgPath)
+          .outputOptions([
+            "-map 0:v:0",   // 映像だけ残す
+            "-map -0:a",    // 音声削除
+            "-map -0:s",    // 字幕削除
+            "-map -0:d",    // データストリーム削除
+            "-map -0:t",    // タイムコード削除
+            "-map -0:u",    // udta/GPS削除
+            "-map -0:V",    // QuickTime metadata削除
+            "-c:v copy"
+          ])
+          .save(bgClean)
+          .on("end", resolve)
+          .on("error", reject);
+      });
+
+      // ----------------------------------------------------
       // MP3 → AAC 安定化
       // ----------------------------------------------------
       await new Promise((resolve, reject) => {
@@ -197,21 +219,20 @@ app.post("/clip", async (req, res) => {
         });
       });
 
-      // ---- 背景を A で切る（最大ズレ防止）----
+      // ---- 背景を A で切る ----
       await new Promise((resolve, reject) => {
         ffmpeg()
-          .input(bgPath)
+          .input(bgClean)
           .outputOptions([`-t ${audioDurationA}`, "-c copy"])
           .save(bgTrimmedA)
           .on("end", resolve)
           .on("error", reject);
       });
 
-      // ---- 仮クリップ生成（A基準・PTSリセットなし）----
+      // ---- 仮クリップ生成（A基準）----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgTrimmedA)
-          .inputOptions(["-an"]) // ← 背景音声完全封鎖
           .input(audioFixedPath)
           .input(subtitlePath)
           .complexFilter([
@@ -248,18 +269,17 @@ app.post("/clip", async (req, res) => {
       // ---- 背景を B で切り直す ----
       await new Promise((resolve, reject) => {
         ffmpeg()
-          .input(bgPath)
+          .input(bgClean)
           .outputOptions([`-t ${durationB}`, "-c copy"])
           .save(bgTrimmedB)
           .on("end", resolve)
           .on("error", reject);
       });
 
-      // ---- 本番クリップ生成（PTSリセットはここで1回だけ）----
+      // ---- 本番クリップ生成（PTSリセット1回）----
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgTrimmedB)
-          .inputOptions(["-an"]) // ← 背景音声完全封鎖（決定的修正）
           .input(audioFixedPath)
           .input(subtitlePath)
           .complexFilter([
@@ -306,7 +326,7 @@ app.post("/clip", async (req, res) => {
 
       // Cleanup
       for (const p of [
-        bgPath, bgTrimmedA, bgTrimmedB,
+        bgPath, bgClean, bgTrimmedA, bgTrimmedB,
         audioPath, audioFixedPath, subtitlePath,
         clipA, clipB, clipNormalized
       ]) {
@@ -324,8 +344,6 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
-
-
 
 // ------------------------------
 // POST /final-render-url
