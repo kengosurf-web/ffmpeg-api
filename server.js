@@ -111,7 +111,7 @@ app.post("/clip", async (req, res) => {
       });
     }
 
-    console.log("Generating 1-sentence clip (A基準・PTS1回・concat寛容ルート)...");
+    console.log("Generating 1-sentence clip (A基準・PTS1回・背景音声完全封鎖)...");
 
     const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
@@ -211,6 +211,7 @@ app.post("/clip", async (req, res) => {
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgTrimmedA)
+          .inputOptions(["-an"]) // ← 背景音声完全封鎖
           .input(audioFixedPath)
           .input(subtitlePath)
           .complexFilter([
@@ -242,7 +243,6 @@ app.post("/clip", async (req, res) => {
         });
       });
 
-      // ---- B を丸める（concat安定化）----
       durationB = Number(durationB.toFixed(3));
 
       // ---- 背景を B で切り直す ----
@@ -259,6 +259,7 @@ app.post("/clip", async (req, res) => {
       await new Promise((resolve, reject) => {
         ffmpeg()
           .input(bgTrimmedB)
+          .inputOptions(["-an"]) // ← 背景音声完全封鎖（決定的修正）
           .input(audioFixedPath)
           .input(subtitlePath)
           .complexFilter([
@@ -323,6 +324,7 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message || "Server error" });
   }
 });
+
 
 
 // ------------------------------
