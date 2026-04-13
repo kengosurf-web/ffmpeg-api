@@ -339,7 +339,7 @@ app.get("/final-render-status", (req, res) => {
 });
 
 // ------------------------------
-// 新しい最終レンダー（concat filter + ffprobe + 再エンコード + 進捗）
+// 新しい最終レンダー（超軽量 concat filter）
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
   console.log(`Processing final render job (concat filter): ${jobId}`);
@@ -353,7 +353,7 @@ async function processFinalRenderJob(jobId, clips) {
     jobs[jobId].currentStep = "downloading clips";
     jobs[jobId].progress = 10;
 
-    const cacheBust = `?v=${Date.now()}&cb=${Math.random()}&nocache=1`;
+    const cacheBust = `?cb=1`;
 
     for (const clip of clips) {
       const localPath = `/tmp/clip-${uuidv4()}.mp4`;
@@ -406,11 +406,8 @@ async function processFinalRenderJob(jobId, clips) {
         .outputOptions([
           "-map [v]",
           "-map [a]",
-          "-c:v libx264",
-          "-preset veryfast",
-          "-crf 23",
-          "-c:a aac",
-          "-b:a 192k",
+          "-c:v copy",        // ← 映像はコピー（超軽量）
+          "-c:a copy",        // ← 音声もコピー（超軽量）
           "-movflags +faststart"
         ])
         .save(finalOutput)
