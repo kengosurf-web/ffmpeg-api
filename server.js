@@ -339,7 +339,7 @@ app.get("/final-render-status", (req, res) => {
 });
 
 // ------------------------------
-// 新しい最終レンダー（超軽量 concat filter）
+// 新しい最終レンダー（超軽量 concat filter + 最軽量再エンコード）
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
   console.log(`Processing final render job (concat filter): ${jobId}`);
@@ -406,8 +406,16 @@ async function processFinalRenderJob(jobId, clips) {
         .outputOptions([
           "-map [v]",
           "-map [a]",
-          "-c:v copy",        // ← 映像はコピー（超軽量）
-          "-c:a copy",        // ← 音声もコピー（超軽量）
+
+          // ★ concat filter の出力は copy 不可 → 最軽量の再エンコード
+          "-c:v libx264",
+          "-preset ultrafast",
+          "-crf 28",
+
+          "-c:a aac",
+          "-b:a 128k",
+
+          "-pix_fmt yuv420p",
           "-movflags +faststart"
         ])
         .save(finalOutput)
@@ -436,6 +444,7 @@ async function processFinalRenderJob(jobId, clips) {
     jobs[jobId].errorMessage = err.message || String(err);
   }
 }
+
 
 // ------------------------------
 // GET /final-result/:jobId
