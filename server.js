@@ -447,6 +447,71 @@ app.get("/final-render-status", (req, res) => {
 
 
 // ------------------------------
+// processFinalRenderJob（進捗付き）
+// ------------------------------
+async function processFinalRenderJob(jobId, clips, outputPath) {
+  try {
+    // 10%
+    jobs[jobId].currentStep = "downloading clips";
+    jobs[jobId].progress = 10;
+
+    const downloaded = await Promise.all(
+      clips.map(url => downloadToTmp(url))
+    );
+
+    // 40%
+    jobs[jobId].currentStep = "preparing concat list";
+    jobs[jobId].progress = 40;
+
+    const concatList = downloaded.map(f => `file '${f}'`).join("\n");
+    const listPath = `/tmp/concat_${jobId}.txt`;
+    fs.writeFileSync(listPath, concatList);
+
+    // 55%
+    jobs[jobId].currentStep = "concatenating video";
+    jobs[jobId].progress = 55;
+
+    const finalOutput = `/tmp/final_${jobId}.mp4`;
+
+    await execPromise(
+      `ffmpeg -y -f concat -safe 0 -i ${listPath} -c copy ${finalOutput}`
+    );
+
+    // 75%
+    jobs[jobId].currentStep = "normalizing audio";
+    jobs[jobId].progress = 75;
+
+    const normalizedOutput = `/tmp/final_norm_${jobId}.mp4`;
+
+    await execPromise(
+      `ffmpeg -y -i ${finalOutput} -af loudnorm ${normalizedOutput}`
+    );
+
+    // 90%
+    jobs[jobId].currentStep = "uploading to GitHub";
+    jobs[jobId].progress = 90;
+
+    const uploadedUrl = await uploadToGitHub(
+      normalizedOutput,
+      `final/${jobId}.mp4`
+    );
+
+    // 完了
+    jobs[jobId].status = "done";
+    jobs[jobId].currentStep = "completed";
+    jobs[jobId].progress = 100;
+    jobs[jobId].outputPath = uploadedUrl;
+
+  } catch (err) {
+    jobs[jobId].status = "error";
+    jobs[jobId].currentStep = "error";
+    jobs[jobId].progress = 0;
+    jobs[jobId].errorMessage = err.message || String(err);
+  }
+}
+
+
+// ------------------------------
 // POST /bgm-mix
 // ------------------------------
 app.post("/bgm-mix", async (req, res) => {
@@ -489,6 +554,52 @@ app.post("/bgm-mix", async (req, res) => {
 
 
 // ------------------------------
+// processBgmMixJob（進捗付き）
+// ------------------------------
+async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
+  try {
+    // 20%
+    jobs[jobId].currentStep = "downloading video & bgm";
+    jobs[jobId].progress = 20;
+
+    const videoPath = await downloadToTmp(finalVideoUrl);
+    const bgmPath = await downloadToTmp(bgmUrl);
+
+    // 60%
+    jobs[jobId].currentStep = "mixing audio";
+    jobs[jobId].progress = 60;
+
+    const mixedOutput = `/tmp/bgm_mix_${jobId}.mp4`;
+
+    await execPromise(
+      `ffmpeg -y -i ${videoPath} -i ${bgmPath} -filter_complex "[1:a]volume=0.15[a1];[0:a][a1]amix=inputs=2:duration=first" -c:v copy -c:a aac ${mixedOutput}`
+    );
+
+    // 90%
+    jobs[jobId].currentStep = "uploading to GitHub";
+    jobs[jobId].progress = 90;
+
+    const uploadedUrl = await uploadToGitHub(
+      mixedOutput,
+      `bgm/${jobId}.mp4`
+    );
+
+    // 完了
+    jobs[jobId].status = "done";
+    jobs[jobId].currentStep = "completed";
+    jobs[jobId].progress = 100;
+    jobs[jobId].outputPath = uploadedUrl;
+
+  } catch (err) {
+    jobs[jobId].status = "error";
+    jobs[jobId].currentStep = "error";
+    jobs[jobId].progress = 0;
+    jobs[jobId].errorMessage = err.message || String(err);
+  }
+}
+
+
+// ------------------------------
 // GET /bgm-mix-status
 // ------------------------------
 app.get("/bgm-mix-status", (req, res) => {
@@ -528,6 +639,7 @@ app.get("/bgm-mix-status", (req, res) => {
     progress: job.progress || 0
   });
 });
+
 
 // ------------------------------
 // GET /final-result/:jobId
