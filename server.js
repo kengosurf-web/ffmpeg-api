@@ -98,6 +98,11 @@ app.get("/health", (req, res) => {
 // ------------------------------
 const jobs = {};
 
+import fs from "fs";
+import ffmpeg from "fluent-ffmpeg";
+import { v4 as uuidv4 } from "uuid";
+import { exec } from "child_process";
+
 // ------------------------------
 // /clip（A 切りで音声ストリームを整える版）
 // ------------------------------
@@ -187,8 +192,8 @@ app.post("/clip", async (req, res) => {
         .input(bgPath)
         .outputOptions([
           `-t ${durationA}`,
-          "-c:v copy",   // 映像はコピー
-          "-c:a aac",    // 音声だけ再エンコードしてフレーム境界を整える
+          "-c:v copy",
+          "-c:a aac",
           "-b:a 128k",
           "-ar 48000",
           "-ac 2"
@@ -199,7 +204,7 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // overlay（字幕合成）※唯一の重い処理
+    // overlay（字幕合成）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -227,55 +232,53 @@ app.post("/clip", async (req, res) => {
         .on("error", reject);
     });
 
-// ------------------------------
-// 正規化（映像は copy → 最軽量）
-// ------------------------------
-await new Promise((resolve, reject) => {
-  ffmpeg()
-    .input(clip)
-    .outputOptions([
-      "-c:v copy",
-      "-c:a aac",
-      "-movflags +faststart"
-    ])
-    .save(clipFast)
-    .on("end", resolve)
-    .on("error", reject);
-});
+    // ------------------------------
+    // 正規化（映像 copy + 音声 aac）
+    // ------------------------------
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(clip)
+        .outputOptions([
+          "-c:v copy",
+          "-c:a aac",
+          "-movflags +faststart"
+        ])
+        .save(clipFast)
+        .on("end", resolve)
+        .on("error", reject);
+    });
 
-// ------------------------------
-// 出力前に ffprobe（デバッグ）
-// ------------------------------
-const { exec } = require("child_process");
+    // ------------------------------
+    // ffprobe デバッグ
+    // ------------------------------
+    await new Promise((resolve) => {
+      exec(`ffprobe -hide_banner -show_streams -show_format ${clipFast}`, (err, stdout, stderr) => {
+        console.log("FFPROBE RESULT:");
+        console.log(stdout);
+        console.log(stderr);
+        resolve();
+      });
+    });
 
-await new Promise((resolve) => {
-  exec(`ffprobe -hide_banner -show_streams -show_format ${clipFast}`, (err, stdout, stderr) => {
-    console.log("FFPROBE RESULT:");
-    console.log(stdout);
-    console.log(stderr);
-    resolve();
-  });
-});
+    // ------------------------------
+    // 出力
+    // ------------------------------
+    const file = fs.readFileSync(clipFast);
 
-// ------------------------------
-// 出力
-// ------------------------------
-const file = fs.readFileSync(clipFast);
+    // cleanup
+    for (const p of [bgPath, bgA, audioPath, audioFixed, subtitlePath, clip, clipFast]) {
+      try { fs.unlinkSync(p); } catch {}
+    }
 
-// cleanup
-for (const p of [bgPath, bgA, audioPath, audioFixed, subtitlePath, clip, clipFast]) {
-  try { fs.unlinkSync(p); } catch {}
-}
-
-res.setHeader("Content-Type", "video/mp4");
-res.send(file);
-
+    res.setHeader("Content-Type", "video/mp4");
+    res.send(file);
 
   } catch (err) {
     console.error("SERVER ERROR (/clip):", err);
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // ------------------------------
 // POST /final-render-url
