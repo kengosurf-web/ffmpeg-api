@@ -243,6 +243,16 @@ app.post("/clip", async (req, res) => {
         .on("error", reject);
     });
 
+// ------------------------------
+// 出力前に ffprobe（デバッグ）
+// ------------------------------
+const { exec } = require("child_process");
+exec(`ffprobe -hide_banner -show_streams -show_format ${clipFast}`, (err, stdout, stderr) => {
+  console.log("FFPROBE RESULT:");
+  console.log(stdout);
+  console.log(stderr);
+});
+
     // ------------------------------
     // 出力
     // ------------------------------
