@@ -100,7 +100,7 @@ app.get("/health", (req, res) => {
 const jobs = {};
 
 // ------------------------------
-// /clip（PNG → WebP 変換入り / A切り / FPS固定）
+// /clip（PNG → WebP 変換入り / A切り / FPS完全固定）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -214,7 +214,7 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // overlay（WebP）＋ FPS固定（-r 30）
+    // overlay（WebP）＋ FPS完全固定（filter内でfps=30）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -222,9 +222,17 @@ app.post("/clip", async (req, res) => {
         .input(audioFixed)
         .input(subtitlePathWebp)
         .complexFilter([
+          // ★ 映像をまず30fpsに統一（これが最重要）
+          {
+            filter: "fps",
+            options: "30",
+            inputs: "0:v",
+            outputs: "v0"
+          },
+          // ★ overlay は fps 統一後の映像に対して行う
           {
             filter: "overlay",
-            inputs: ["0:v", "2:v"],
+            inputs: ["v0", "2:v"],
             options: { x: "(W-w)/2", y: "(H-h)/2" },
             outputs: "v"
           }
@@ -234,7 +242,7 @@ app.post("/clip", async (req, res) => {
           "-map 1:a",
           "-c:v libx264",
           "-preset superfast",
-          "-r 30",              // ★ FPS固定（最小限の安定化）
+          "-r 30",              // 出力FPSも30
           "-c:a aac",
           "-pix_fmt yuv420p"
         ])
@@ -293,6 +301,7 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 
 // ------------------------------
