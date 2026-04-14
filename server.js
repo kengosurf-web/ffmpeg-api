@@ -98,11 +98,6 @@ app.get("/health", (req, res) => {
 // ------------------------------
 const jobs = {};
 
-import fs from "fs";
-import ffmpeg from "fluent-ffmpeg";
-import { v4 as uuidv4 } from "uuid";
-import { exec } from "child_process";
-
 // ------------------------------
 // /clip（A 切りで音声ストリームを整える版）
 // ------------------------------
