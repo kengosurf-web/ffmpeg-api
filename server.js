@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from "uuid";
 import fetch from "node-fetch";
 import path from "path";
 import { fileURLToPath } from "url";
+import { exec } from "child_process";   // ← ★これが必要だった
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -101,6 +102,7 @@ const jobs = {};
 // ------------------------------
 // /clip（A 切りで音声ストリームを整える版）
 // ------------------------------
+
 app.post("/clip", async (req, res) => {
   try {
     const { subtitlePng, audioUrl, backgroundVideo } = req.body;
