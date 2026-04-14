@@ -200,7 +200,7 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // overlay（字幕合成）
+    // overlay（字幕合成）★ superfast に変更
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -219,7 +219,7 @@ app.post("/clip", async (req, res) => {
           "-map [v]",
           "-map 1:a",
           "-c:v libx264",
-          "-preset ultrafast",
+          "-preset superfast",   // ← ultrafast → superfast に変更
           "-c:a aac",
           "-pix_fmt yuv420p"
         ])
@@ -274,6 +274,7 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 
 // ------------------------------
@@ -435,7 +436,7 @@ async function processFinalRenderJob(jobId, clips) {
           "-map [v]",
           "-map [a]",
           "-c:v libx264",
-          "-preset ultrafast",
+          "-preset superfast",   // ultrafast → superfast に合わせて軽量化
           "-crf 28",
           "-c:a aac",
           "-b:a 128k",
@@ -492,6 +493,7 @@ app.get("/final-result/:jobId", (req, res) => {
 
   res.sendFile(filePath);
 });
+
 
 
 
