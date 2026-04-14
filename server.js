@@ -99,8 +99,9 @@ app.get("/health", (req, res) => {
 // ------------------------------
 const jobs = {};
 
+
 // ------------------------------
-// /clip（PNG → WebP 変換入り / A切り / FPS完全固定）
+// /clip（PNG → WebP 変換入り / A切り / 背景リサイズ → FPS完全固定 → overlay）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -214,7 +215,7 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // overlay（WebP）＋ FPS完全固定（filter内でfps=30）
+    // 背景リサイズ → FPS固定 → overlay（字幕）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -222,14 +223,21 @@ app.post("/clip", async (req, res) => {
         .input(audioFixed)
         .input(subtitlePathWebp)
         .complexFilter([
-          // ★ 映像をまず30fpsに統一（これが最重要）
+          // ① 背景を画面幅に固定（字幕が動かないための最重要ポイント）
+          {
+            filter: "scale",
+            options: "720:1280:force_original_aspect_ratio=decrease",
+            inputs: "0:v",
+            outputs: "v_bg"
+          },
+          // ② FPS を 30 に統一
           {
             filter: "fps",
             options: "30",
-            inputs: "0:v",
+            inputs: "v_bg",
             outputs: "v0"
           },
-          // ★ overlay は fps 統一後の映像に対して行う
+          // ③ 字幕を重ねる（背景が固定された後なので字幕は動かない）
           {
             filter: "overlay",
             inputs: ["v0", "2:v"],
@@ -242,7 +250,7 @@ app.post("/clip", async (req, res) => {
           "-map 1:a",
           "-c:v libx264",
           "-preset superfast",
-          "-r 30",              // 出力FPSも30
+          "-r 30",
           "-c:a aac",
           "-pix_fmt yuv420p"
         ])
