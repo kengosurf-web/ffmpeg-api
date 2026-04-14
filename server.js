@@ -276,7 +276,6 @@ app.post("/clip", async (req, res) => {
 });
 
 
-
 // ------------------------------
 // POST /final-render-url
 // ------------------------------
@@ -409,9 +408,7 @@ async function processFinalRenderJob(jobId, clips) {
     const ff = ffmpeg();
     filterList.forEach((c) => ff.input(c.path));
 
-    // ------------------------------
     // ★ タイムライン方式（ストリーム構造の一致不要）
-    // ------------------------------
     const filterInputs = filterList
       .map((c, i) => {
         return `[${i}:v]setpts=PTS-STARTPTS[v${i}];[${i}:a]asetpts=PTS-STARTPTS[a${i}];`;
@@ -495,6 +492,8 @@ app.get("/final-result/:jobId", (req, res) => {
 
   res.sendFile(filePath);
 });
+
+
 
 // ------------------------------
 // POST /bgm-mix
