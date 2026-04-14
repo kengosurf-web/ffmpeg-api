@@ -99,7 +99,7 @@ app.get("/health", (req, res) => {
 const jobs = {};
 
 // ------------------------------
-// /clip（最軽量 A 切り版・最適化済み）
+// /clip（A 切りで音声ストリームを整える版）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -180,12 +180,19 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // 背景を A で切る（copy → 最軽量）
+    // 背景を A で切る（映像 copy + 音声だけ再エンコード）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(bgPath)
-        .outputOptions([`-t ${durationA}`, "-c copy"])
+        .outputOptions([
+          `-t ${durationA}`,
+          "-c:v copy",   // 映像はコピー
+          "-c:a aac",    // 音声だけ再エンコードしてフレーム境界を整える
+          "-b:a 128k",
+          "-ar 48000",
+          "-ac 2"
+        ])
         .save(bgA)
         .on("end", resolve)
         .on("error", reject);
@@ -227,7 +234,7 @@ app.post("/clip", async (req, res) => {
       ffmpeg()
         .input(clip)
         .outputOptions([
-          "-c:v copy",          // ← 映像はコピーでOK（軽量化ポイント）
+          "-c:v copy",
           "-c:a aac",
           "-movflags +faststart"
         ])
@@ -254,8 +261,6 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-
 
 // ------------------------------
 // POST /final-render-url
