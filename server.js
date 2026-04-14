@@ -359,10 +359,10 @@ app.get("/final-render-status", (req, res) => {
 });
 
 // ------------------------------
-// 新しい最終レンダー（超軽量 concat filter + 最軽量再エンコード）
+// 新しい最終レンダー（タイムライン方式 / concat unsafe=1）
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
-  console.log(`Processing final render job (concat filter): ${jobId}`);
+  console.log(`Processing final render job (timeline concat): ${jobId}`);
 
   const id = uuidv4();
   const filterList = [];
@@ -375,6 +375,7 @@ async function processFinalRenderJob(jobId, clips) {
 
     const cacheBust = `?cb=1`;
 
+    // クリップを全部ダウンロード
     for (const clip of clips) {
       const localPath = `/tmp/clip-${uuidv4()}.mp4`;
       const clipDownloadUrl = clip.clipUrl + cacheBust;
@@ -398,11 +399,7 @@ async function processFinalRenderJob(jobId, clips) {
       if (!videoStream) throw new Error(`Video stream missing: ${clip.clipUrl}`);
       if (!audioStream) throw new Error(`Audio stream missing: ${clip.clipUrl}`);
 
-      filterList.push({
-        path: localPath,
-        v: videoStream.index,
-        a: audioStream.index
-      });
+      filterList.push({ path: localPath });
     }
 
     // 50%
@@ -412,9 +409,26 @@ async function processFinalRenderJob(jobId, clips) {
     const ff = ffmpeg();
     filterList.forEach((c) => ff.input(c.path));
 
-    const filterComplex =
-      filterList.map((c, i) => `[${i}:v][${i}:a]`).join("") +
-      `concat=n=${filterList.length}:v=1:a=1[v][a]`;
+    // ------------------------------
+    // ★ タイムライン方式（ストリーム構造の一致不要）
+    // ------------------------------
+    const filterInputs = filterList
+      .map((c, i) => {
+        return `
+          [${i}:v]setpts=PTS-STARTPTS[v${i}];
+          [${i}:a]asetpts=PTS-STARTPTS[a${i}];
+        `;
+      })
+      .join("\n");
+
+    const concatInputs = filterList
+      .map((c, i) => `[v${i}][a${i}]`)
+      .join("");
+
+    const filterComplex = `
+      ${filterInputs}
+      ${concatInputs}concat=n=${filterList.length}:v=1:a=1:unsafe=1[v][a]
+    `;
 
     // 70%
     jobs[jobId].currentStep = "concatenating video";
@@ -426,15 +440,11 @@ async function processFinalRenderJob(jobId, clips) {
         .outputOptions([
           "-map [v]",
           "-map [a]",
-
-          // ★ concat filter の出力は copy 不可 → 最軽量の再エンコード
           "-c:v libx264",
           "-preset ultrafast",
           "-crf 28",
-
           "-c:a aac",
           "-b:a 128k",
-
           "-pix_fmt yuv420p",
           "-movflags +faststart"
         ])
