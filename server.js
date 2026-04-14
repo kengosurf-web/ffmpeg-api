@@ -414,21 +414,18 @@ async function processFinalRenderJob(jobId, clips) {
     // ------------------------------
     const filterInputs = filterList
       .map((c, i) => {
-        return `
-          [${i}:v]setpts=PTS-STARTPTS[v${i}];
-          [${i}:a]asetpts=PTS-STARTPTS[a${i}];
-        `;
+        return `[${i}:v]setpts=PTS-STARTPTS[v${i}];[${i}:a]asetpts=PTS-STARTPTS[a${i}];`;
       })
-      .join("\n");
+      .join("");
 
     const concatInputs = filterList
       .map((c, i) => `[v${i}][a${i}]`)
       .join("");
 
-    const filterComplex = `
-      ${filterInputs}
-      ${concatInputs}concat=n=${filterList.length}:v=1:a=1:unsafe=1[v][a]
-    `;
+    const filterComplex =
+      filterInputs +
+      concatInputs +
+      `concat=n=${filterList.length}:v=1:a=1:unsafe=1[v][a]`;
 
     // 70%
     jobs[jobId].currentStep = "concatenating video";
@@ -474,7 +471,6 @@ async function processFinalRenderJob(jobId, clips) {
     jobs[jobId].errorMessage = err.message || String(err);
   }
 }
-
 
 // ------------------------------
 // GET /final-result/:jobId
