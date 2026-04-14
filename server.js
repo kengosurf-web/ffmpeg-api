@@ -100,7 +100,7 @@ app.get("/health", (req, res) => {
 const jobs = {};
 
 // ------------------------------
-// /clip（PNG → WebP 変換入り / A切り）
+// /clip（PNG → WebP 変換入り / A切り / FPS固定）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -144,21 +144,21 @@ app.post("/clip", async (req, res) => {
     const audioPath = `/tmp/audio-${unique}.mp3`;
     const audioFixed = `/tmp/audioF-${unique}.m4a`;
 
-    const subtitlePathPng = `/tmp/sub-${unique}.png`;   // 元 PNG
-    const subtitlePathWebp = `/tmp/sub-${unique}.webp`; // 変換後 WebP
+    const subtitlePathPng = `/tmp/sub-${unique}.png`;
+    const subtitlePathWebp = `/tmp/sub-${unique}.webp`;
 
     const clip = `/tmp/clip-${unique}.mp4`;
     const clipFast = `/tmp/clipF-${unique}.mp4`;
 
     // ------------------------------
-    // ダウンロード（軽量）
+    // ダウンロード
     // ------------------------------
     fs.writeFileSync(bgPath, await fetchBinaryWithRetry(backgroundVideo + "?cb=1"));
     fs.writeFileSync(audioPath, await fetchBinaryWithRetry(audioUrl + "?cb=1"));
     fs.writeFileSync(subtitlePathPng, await fetchBinaryWithRetry(subtitlePng + "?cb=1"));
 
     // ------------------------------
-    // PNG → WebP 変換（軽量化の要）
+    // PNG → WebP 変換
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -170,7 +170,7 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // 音声を AAC に安定化（軽量）
+    // 音声を AAC に安定化
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -214,13 +214,13 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // overlay（字幕合成）★ WebP を使用
+    // overlay（WebP）＋ FPS固定（-r 30）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(bgA)
         .input(audioFixed)
-        .input(subtitlePathWebp) // ← WebP を overlay
+        .input(subtitlePathWebp)
         .complexFilter([
           {
             filter: "overlay",
@@ -234,6 +234,7 @@ app.post("/clip", async (req, res) => {
           "-map 1:a",
           "-c:v libx264",
           "-preset superfast",
+          "-r 30",              // ★ FPS固定（最小限の安定化）
           "-c:a aac",
           "-pix_fmt yuv420p"
         ])
@@ -292,6 +293,7 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 
 // ------------------------------
