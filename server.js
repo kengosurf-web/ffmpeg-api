@@ -455,7 +455,7 @@ async function processFinalRenderJob(jobId, clips) {
           "-map [v]",
           "-map [a]",
           "-c:v libx264",
-          "-preset superfast",   // ultrafast → superfast に合わせて軽量化
+          "-preset superfast",
           "-crf 28",
           "-c:a aac",
           "-b:a 128k",
@@ -468,15 +468,16 @@ async function processFinalRenderJob(jobId, clips) {
     });
 
     // 90%
-    jobs[jobId].currentStep = "uploading to GitHub";
+    jobs[jobId].currentStep = "finalizing";
     jobs[jobId].progress = 90;
 
-    const uploadedUrl = await uploadToGitHub(finalOutput, `final/${jobId}.mp4`);
+    // ★ GitHub アップロードは削除
+    // jobs[jobId].outputPath = uploadedUrl;
 
     jobs[jobId].status = "done";
     jobs[jobId].currentStep = "completed";
     jobs[jobId].progress = 100;
-    jobs[jobId].outputPath = uploadedUrl;
+    jobs[jobId].outputPath = finalOutput;
 
     console.log(`Final render job completed: ${jobId}`);
 
