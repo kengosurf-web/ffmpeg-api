@@ -143,7 +143,7 @@ app.post("/clip", async (req, res) => {
 
     const audioPath = `/tmp/audio-${unique}.mp3`;
     const audioFixed = `/tmp/audioF-${unique}.m4a`;
-    const subtitlePath = `/tmp/sub-${unique}.png`;
+    const subtitlePath = `/tmp/sub-${unique}.webp`;
 
     const clip = `/tmp/clip-${unique}.mp4`;
     const clipFast = `/tmp/clipF-${unique}.mp4`;
