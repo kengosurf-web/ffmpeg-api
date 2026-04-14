@@ -295,7 +295,6 @@ app.post("/clip", async (req, res) => {
 });
 
 
-
 // ------------------------------
 // POST /final-render-url
 // ------------------------------
@@ -428,10 +427,16 @@ async function processFinalRenderJob(jobId, clips) {
     const ff = ffmpeg();
     filterList.forEach((c) => ff.input(c.path));
 
-    // ★ タイムライン方式（ストリーム構造の一致不要）
+    // ★ タイムライン方式 + 強制スケール統一
     const filterInputs = filterList
       .map((c, i) => {
-        return `[${i}:v]setpts=PTS-STARTPTS[v${i}];[${i}:a]asetpts=PTS-STARTPTS[a${i}];`;
+        return (
+          `[${i}:v]` +
+          `setpts=PTS-STARTPTS,` +
+          `scale=1080:1920:force_original_aspect_ratio=decrease` +
+          `[v${i}];` +
+          `[${i}:a]asetpts=PTS-STARTPTS[a${i}];`
+        );
       })
       .join("");
 
@@ -470,9 +475,6 @@ async function processFinalRenderJob(jobId, clips) {
     // 90%
     jobs[jobId].currentStep = "finalizing";
     jobs[jobId].progress = 90;
-
-    // ★ GitHub アップロードは削除
-    // jobs[jobId].outputPath = uploadedUrl;
 
     jobs[jobId].status = "done";
     jobs[jobId].currentStep = "completed";
@@ -599,10 +601,10 @@ async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
         .input(videoPath)  // 0:v, 0:a
         .input(bgmPath)    // 1:a
         .complexFilter([
-          // BGM の音量を下げる（20%）
+          // BGM の音量を下げる（40%）
           {
             filter: "volume",
-            options: "0.2",
+            options: "0.4",
             inputs: "1:a",
             outputs: "bgm_low"
           },
