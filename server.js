@@ -215,7 +215,7 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // 背景リサイズ → FPS固定 → overlay（字幕）
+    // 背景リサイズ → 偶数化 → FPS固定 → overlay（字幕）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -223,21 +223,28 @@ app.post("/clip", async (req, res) => {
         .input(audioFixed)
         .input(subtitlePathWebp)
         .complexFilter([
-          // ① 背景を画面幅に固定（字幕が動かないための最重要ポイント）
+          // ① 背景を画面幅に固定
           {
             filter: "scale",
             options: "720:1280:force_original_aspect_ratio=decrease",
             inputs: "0:v",
+            outputs: "v_scaled"
+          },
+          // ★ ② 偶数化（H.264 が奇数を拒否するため）
+          {
+            filter: "pad",
+            options: "ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2",
+            inputs: "v_scaled",
             outputs: "v_bg"
           },
-          // ② FPS を 30 に統一
+          // ③ FPS を 30 に統一
           {
             filter: "fps",
             options: "30",
             inputs: "v_bg",
             outputs: "v0"
           },
-          // ③ 字幕を重ねる（背景が固定された後なので字幕は動かない）
+          // ④ 字幕を重ねる
           {
             filter: "overlay",
             inputs: ["v0", "2:v"],
@@ -309,6 +316,7 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 
 
