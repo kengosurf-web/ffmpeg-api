@@ -230,24 +230,31 @@ app.post("/clip", async (req, res) => {
             inputs: "0:v",
             outputs: "v_scaled"
           },
-          // ★ ② 偶数化（H.264 が奇数を拒否するため）
+          // ② 偶数化
           {
             filter: "pad",
             options: "ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2",
             inputs: "v_scaled",
             outputs: "v_bg"
           },
-          // ③ FPS を 30 に統一
+          // ③ 背景を30fpsに統一
           {
             filter: "fps",
             options: "30",
             inputs: "v_bg",
             outputs: "v0"
           },
-          // ④ 字幕を重ねる
+          // ★ ④ 字幕にも30fpsを付ける（重要）
+          {
+            filter: "fps",
+            options: "30",
+            inputs: "2:v",
+            outputs: "v_sub"
+          },
+          // ⑤ overlay
           {
             filter: "overlay",
-            inputs: ["v0", "2:v"],
+            inputs: ["v0", "v_sub"],
             options: { x: "(W-w)/2", y: "(H*2/3 - h/2)" },
             outputs: "v"
           }
@@ -316,6 +323,7 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 
 
