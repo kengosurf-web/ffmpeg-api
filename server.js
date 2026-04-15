@@ -411,7 +411,7 @@ app.get("/final-render-status", (req, res) => {
 });
 
 // ------------------------------
-// 新しい最終レンダー（タイムライン方式 / concat unsafe=1）
+// 新しい最終レンダー（タイムライン方式 / concat unsafe=1 / FPS完全固定）
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
   console.log(`Processing final render job (timeline concat): ${jobId}`);
@@ -461,13 +461,14 @@ async function processFinalRenderJob(jobId, clips) {
     const ff = ffmpeg();
     filterList.forEach((c) => ff.input(c.path));
 
-    // ★ タイムライン方式 + 強制スケール統一
+    // ★ タイムライン方式 + 強制スケール統一 + FPS固定
     const filterInputs = filterList
       .map((c, i) => {
         return (
           `[${i}:v]` +
           `setpts=PTS-STARTPTS,` +
-          `scale=1080:1920:force_original_aspect_ratio=decrease` +
+          `scale=1080:1920:force_original_aspect_ratio=decrease,` +
+          `fps=30` +                     // ★ FPS固定（重要）
           `[v${i}];` +
           `[${i}:a]asetpts=PTS-STARTPTS[a${i}];`
         );
@@ -496,6 +497,7 @@ async function processFinalRenderJob(jobId, clips) {
           "-c:v libx264",
           "-preset superfast",
           "-crf 28",
+          "-r 30",              // ★ 出力FPSも固定
           "-c:a aac",
           "-b:a 128k",
           "-pix_fmt yuv420p",
