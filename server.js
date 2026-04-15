@@ -248,7 +248,7 @@ app.post("/clip", async (req, res) => {
           {
             filter: "overlay",
             inputs: ["v0", "2:v"],
-            options: { x: "(W-w)/2", y: "(H-h)/2" },
+            options: { x: "(W-w)/2", y: "(H*2/3 - h/2)" },
             outputs: "v"
           }
         ])
