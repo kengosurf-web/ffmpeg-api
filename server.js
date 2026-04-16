@@ -100,8 +100,9 @@ app.get("/health", (req, res) => {
 const jobs = {};
 
 
+
 // ------------------------------
-// /clip（軽量安定版 / copy中心 / 最後だけ ultrafast）
+// /clip（軽量安定版 / copy中心 / 背景切り取りも ultrafast / 最後も ultrafast）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -188,14 +189,17 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // 背景を A で切る（軽量 copy のまま）
-    // ------------------------------
+    // 背景を A で切る（★ ultrafast で軽く再エンコード → 壊れない）
+// ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(bgPath)
         .outputOptions([
           `-t ${durationA}`,
-          "-c:v copy",     // ← copy のまま（軽い）
+          "-c:v libx264",
+          "-preset ultrafast",   // ← copy より軽い & 壊れない
+          "-crf 30",
+          "-r 30",
           "-c:a aac",
           "-b:a 128k",
           "-ar 48000",
@@ -243,7 +247,7 @@ app.post("/clip", async (req, res) => {
         .input(clip)
         .outputOptions([
           "-c:v libx264",
-          "-preset ultrafast",   // ← copy より軽い
+          "-preset ultrafast",
           "-crf 30",
           "-r 30",
           "-c:a aac",
