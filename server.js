@@ -101,15 +101,12 @@ const jobs = {};
 
 
 // ------------------------------
-// /clip（PNG → WebP 変換入り / A切り / 背景リサイズ → FPS完全固定 → overlay）
+// /clip（軽量安定版 / copy中心 / 最後だけ ultrafast）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
     const { subtitlePng, audioUrl, backgroundVideo } = req.body;
 
-    // ------------------------------
-    // fetchBinaryWithRetry（軽量・安定版）
-    // ------------------------------
     async function fetchBinaryWithRetry(url, retries = 3) {
       for (let i = 0; i < retries; i++) {
         try {
@@ -124,19 +121,14 @@ app.post("/clip", async (req, res) => {
           });
 
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
           return Buffer.from(await res.arrayBuffer());
         } catch (err) {
-          console.error(`fetchBinaryWithRetry failed (${i + 1}/${retries}):`, err);
           if (i === retries - 1) throw err;
           await new Promise(r => setTimeout(r, 200));
         }
       }
     }
 
-    // ------------------------------
-    // パス生成
-    // ------------------------------
     const unique = `${uuidv4()}-${Date.now()}-${Math.random()}`;
 
     const bgPath = `/tmp/bg-${unique}.mp4`;
@@ -159,7 +151,7 @@ app.post("/clip", async (req, res) => {
     fs.writeFileSync(subtitlePathPng, await fetchBinaryWithRetry(subtitlePng + "?cb=1"));
 
     // ------------------------------
-    // PNG → WebP 変換
+    // PNG → WebP
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -171,7 +163,7 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // 音声を AAC に安定化
+    // 音声を軽く統一（AAC / 48kHz / stereo）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -196,14 +188,14 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // 背景を A で切る（映像 copy + 音声だけ再エンコード）
+    // 背景を A で切る（軽量 copy のまま）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(bgPath)
         .outputOptions([
           `-t ${durationA}`,
-          "-c:v copy",
+          "-c:v copy",     // ← copy のまま（軽い）
           "-c:a aac",
           "-b:a 128k",
           "-ar 48000",
@@ -215,7 +207,7 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // 背景リサイズ → 偶数化 → FPS固定 → overlay（字幕）
+    // 背景リサイズ → 偶数化 → FPS固定 → overlay
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -223,41 +215,11 @@ app.post("/clip", async (req, res) => {
         .input(audioFixed)
         .input(subtitlePathWebp)
         .complexFilter([
-          // ① 背景を画面幅に固定
-          {
-            filter: "scale",
-            options: "720:1280:force_original_aspect_ratio=decrease",
-            inputs: "0:v",
-            outputs: "v_scaled"
-          },
-          // ② 偶数化
-          {
-            filter: "pad",
-            options: "ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2",
-            inputs: "v_scaled",
-            outputs: "v_bg"
-          },
-          // ③ 背景を30fpsに統一
-          {
-            filter: "fps",
-            options: "30",
-            inputs: "v_bg",
-            outputs: "v0"
-          },
-          // ★ ④ 字幕にも30fpsを付ける（重要）
-          {
-            filter: "fps",
-            options: "30",
-            inputs: "2:v",
-            outputs: "v_sub"
-          },
-          // ⑤ overlay
-          {
-            filter: "overlay",
-            inputs: ["v0", "v_sub"],
-            options: { x: "(W-w)/2", y: "(H*2/3 - h/2)" },
-            outputs: "v"
-          }
+          { filter: "scale", options: "720:1280:force_original_aspect_ratio=decrease", inputs: "0:v", outputs: "v_scaled" },
+          { filter: "pad", options: "ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2", inputs: "v_scaled", outputs: "v_bg" },
+          { filter: "fps", options: "30", inputs: "v_bg", outputs: "v0" },
+          { filter: "fps", options: "30", inputs: "2:v", outputs: "v_sub" },
+          { filter: "overlay", inputs: ["v0", "v_sub"], options: { x: "(W-w)/2", y: "(H*2/3 - h/2)" }, outputs: "v" }
         ])
         .outputOptions([
           "-map [v]",
@@ -274,13 +236,16 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // 正規化（映像 copy + 音声 aac）
+    // 正規化（軽量 ultrafast で timebase を整える）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(clip)
         .outputOptions([
-          "-c:v copy",
+          "-c:v libx264",
+          "-preset ultrafast",   // ← copy より軽い
+          "-crf 30",
+          "-r 30",
           "-c:a aac",
           "-movflags +faststart"
         ])
@@ -290,23 +255,10 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // ffprobe デバッグ
-    // ------------------------------
-    await new Promise((resolve) => {
-      exec(`ffprobe -hide_banner -show_streams -show_format ${clipFast}`, (err, stdout, stderr) => {
-        console.log("FFPROBE RESULT:");
-        console.log(stdout);
-        console.log(stderr);
-        resolve();
-      });
-    });
-
-    // ------------------------------
     // 出力
     // ------------------------------
     const file = fs.readFileSync(clipFast);
 
-    // cleanup
     for (const p of [
       bgPath, bgA, audioPath, audioFixed,
       subtitlePathPng, subtitlePathWebp,
@@ -319,10 +271,10 @@ app.post("/clip", async (req, res) => {
     res.send(file);
 
   } catch (err) {
-    console.error("SERVER ERROR (/clip):", err);
     res.status(500).json({ error: err.message });
   }
 });
+
 
 
 
