@@ -102,7 +102,7 @@ const jobs = {};
 
 
 // ------------------------------
-// /clip（軽量安定版 / copy中心 / 背景切り取りも ultrafast / 最後も ultrafast）
+// /clip（軽量安定版 / 背景切り取りも ultrafast / 最後も ultrafast）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -189,17 +189,19 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // 背景を A で切る（★ ultrafast で軽く再エンコード → 壊れない）
-// ------------------------------
+    // 背景を A で切る（ultrafast で軽く再エンコード）
+    // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(bgPath)
         .outputOptions([
           `-t ${durationA}`,
           "-c:v libx264",
-          "-preset ultrafast",   // ← copy より軽い & 壊れない
+          "-preset ultrafast",
           "-crf 30",
           "-r 30",
+          "-g 30",
+          "-pix_fmt yuv420p",
           "-c:a aac",
           "-b:a 128k",
           "-ar 48000",
@@ -231,6 +233,7 @@ app.post("/clip", async (req, res) => {
           "-c:v libx264",
           "-preset superfast",
           "-r 30",
+          "-g 30",
           "-c:a aac",
           "-pix_fmt yuv420p"
         ])
@@ -240,7 +243,7 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // 正規化（軽量 ultrafast で timebase を整える）
+    // 正規化（ultrafast で timebase を整える）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -250,6 +253,8 @@ app.post("/clip", async (req, res) => {
           "-preset ultrafast",
           "-crf 30",
           "-r 30",
+          "-g 30",
+          "-pix_fmt yuv420p",
           "-c:a aac",
           "-movflags +faststart"
         ])
@@ -278,6 +283,7 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 
 
