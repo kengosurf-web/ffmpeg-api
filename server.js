@@ -100,9 +100,8 @@ app.get("/health", (req, res) => {
 const jobs = {};
 
 
-
 // ------------------------------
-// /clip（軽量安定版 / 背景切り取りも ultrafast / 最後も ultrafast）
+// /clip（初期成功レシピベース / 必要最低限だけ残した安定版）
 // ------------------------------
 app.post("/clip", async (req, res) => {
   try {
@@ -189,7 +188,7 @@ app.post("/clip", async (req, res) => {
     });
 
     // ------------------------------
-    // 背景を A で切る（ultrafast で軽く再エンコード）
+    // 背景を A で切る（軽量 ultrafast）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -200,10 +199,8 @@ app.post("/clip", async (req, res) => {
           "-preset ultrafast",
           "-crf 30",
           "-r 30",
-          "-g 30",
           "-pix_fmt yuv420p",
           "-c:a aac",
-          "-b:a 128k",
           "-ar 48000",
           "-ac 2"
         ])
@@ -233,9 +230,8 @@ app.post("/clip", async (req, res) => {
           "-c:v libx264",
           "-preset superfast",
           "-r 30",
-          "-g 30",
-          "-c:a aac",
-          "-pix_fmt yuv420p"
+          "-pix_fmt yuv420p",
+          "-c:a aac"
         ])
         .save(clip)
         .on("end", resolve)
@@ -253,7 +249,6 @@ app.post("/clip", async (req, res) => {
           "-preset ultrafast",
           "-crf 30",
           "-r 30",
-          "-g 30",
           "-pix_fmt yuv420p",
           "-c:a aac",
           "-movflags +faststart"
@@ -283,11 +278,6 @@ app.post("/clip", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-
-
-
-
 
 
 
@@ -373,13 +363,12 @@ app.get("/final-render-status", (req, res) => {
 });
 
 // ------------------------------
-// 新しい最終レンダー（タイムライン方式 / concat unsafe=1 / FPS完全固定 / Audio完全統一）
+// 最終レンダー（初期成功レシピベース / concat unsafe=1 / 最低限の技術統一）
 // ------------------------------
 async function processFinalRenderJob(jobId, clips) {
-  console.log(`Processing final render job (timeline concat): ${jobId}`);
+  console.log(`Processing final render job (minimal concat): ${jobId}`);
 
   const id = uuidv4();
-  const filterList = [];
   const finalOutput = `/tmp/final-${id}.mp4`;
 
   try {
@@ -388,71 +377,33 @@ async function processFinalRenderJob(jobId, clips) {
     jobs[jobId].progress = 10;
 
     const cacheBust = `?cb=1`;
+    const localPaths = [];
 
     // クリップを全部ダウンロード
     for (const clip of clips) {
       const localPath = `/tmp/clip-${uuidv4()}.mp4`;
-      const clipDownloadUrl = clip.clipUrl + cacheBust;
-
-      await downloadToTmp(clipDownloadUrl, localPath);
-
-      // 30%
-      jobs[jobId].currentStep = "probing streams";
-      jobs[jobId].progress = 30;
-
-      const probe = await new Promise((resolve, reject) => {
-        ffmpeg.ffprobe(localPath, (err, data) => {
-          if (err) reject(err);
-          else resolve(data);
-        });
-      });
-
-      const videoStream = probe.streams.find(s => s.codec_type === "video");
-      const audioStream = probe.streams.find(s => s.codec_type === "audio");
-
-      if (!videoStream) throw new Error(`Video stream missing: ${clip.clipUrl}`);
-      if (!audioStream) throw new Error(`Audio stream missing: ${clip.clipUrl}`);
-
-      filterList.push({ path: localPath });
+      await downloadToTmp(clip.clipUrl + cacheBust, localPath);
+      localPaths.push(localPath);
     }
 
     // 50%
-    jobs[jobId].currentStep = "building filter graph";
+    jobs[jobId].currentStep = "building concat";
     jobs[jobId].progress = 50;
 
     const ff = ffmpeg();
-    filterList.forEach((c) => ff.input(c.path));
+    localPaths.forEach((p) => ff.input(p));
 
-    // ★ タイムライン方式 + 強制スケール統一 + FPS固定 + Audio完全統一
-    const filterInputs = filterList
-      .map((c, i) => {
-        return (
-          `[${i}:v]` +
-          `setpts=PTS-STARTPTS,` +
-          `scale=1080:1920:force_original_aspect_ratio=decrease,` +
-          `fps=30` +
-          `[v${i}];` +
-
-          `[${i}:a]` +
-          `asetpts=PTS-STARTPTS,` +
-          `aresample=async=1:min_hard_comp=0.100000:first_pts=0,` +
-          `aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo` +
-          `[a${i}];`
-        );
-      })
-      .join("");
-
-    const concatInputs = filterList
-      .map((c, i) => `[v${i}][a${i}]`)
+    // concat だけ（クリップはすでに整形済み）
+    const concatInputs = localPaths
+      .map((_, i) => `[${i}:v][${i}:a]`)
       .join("");
 
     const filterComplex =
-      filterInputs +
       concatInputs +
-      `concat=n=${filterList.length}:v=1:a=1:unsafe=1[v][a]`;
+      `concat=n=${localPaths.length}:v=1:a=1:unsafe=1[v][a]`;
 
     // 70%
-    jobs[jobId].currentStep = "concatenating video";
+    jobs[jobId].currentStep = "concatenating";
     jobs[jobId].progress = 70;
 
     await new Promise((resolve, reject) => {
@@ -462,12 +413,13 @@ async function processFinalRenderJob(jobId, clips) {
           "-map [v]",
           "-map [a]",
           "-c:v libx264",
-          "-preset superfast",
-          "-crf 28",
-          "-r 30",              // ★ 出力FPSも固定
-          "-c:a aac",
-          "-b:a 128k",
+          "-preset ultrafast",
+          "-crf 30",
+          "-r 30",
           "-pix_fmt yuv420p",
+          "-c:a aac",
+          "-ar 48000",
+          "-ac 2",
           "-movflags +faststart"
         ])
         .save(finalOutput)
