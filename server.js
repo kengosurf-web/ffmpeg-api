@@ -527,13 +527,32 @@ async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
   const bgmPath = `/tmp/bgm-${id}.mp3`;
   const outputPath = `/tmp/bgm-final-${id}.mp4`;
 
+  // ------------------------------
+  // BGM 専用の retry 付きダウンロード関数
+  // ------------------------------
+  async function downloadWithRetry(url, dest, retries = 3, delayMs = 2500) {
+    for (let i = 0; i < retries; i++) {
+      try {
+        await downloadToTmp(url, dest);
+        return; // 成功したら終了
+      } catch (err) {
+        console.warn(`Retry ${i + 1}/${retries} failed for ${url}`);
+        if (i === retries - 1) throw err; // 最終失敗
+        await new Promise(r => setTimeout(r, delayMs)); // 少し待つ
+      }
+    }
+  }
+
   try {
     // 20%
     jobs[jobId].currentStep = "downloading video & bgm";
     jobs[jobId].progress = 20;
 
+    // 動画は安定しているので通常ダウンロード
     await downloadToTmp(finalVideoUrl, videoPath);
-    await downloadToTmp(bgmUrl, bgmPath);
+
+    // BGM は Jamendo CDN の遅延対策として retry 付き
+    await downloadWithRetry(bgmUrl, bgmPath);
 
     // 40%
     jobs[jobId].currentStep = "probing video duration";
@@ -614,6 +633,7 @@ async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
     jobs[jobId].errorMessage = err.message || String(err);
   }
 }
+
 
 // ------------------------------
 // GET /bgm-mix-status
