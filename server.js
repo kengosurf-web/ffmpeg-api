@@ -280,6 +280,58 @@ app.post("/clip", async (req, res) => {
 });
 
 
+// ------------------------------
+// JPEG → MP4 変換（画像を動画化するだけの軽量API）
+// ------------------------------
+app.post("/image-to-video", async (req, res) => {
+  try {
+    const { imageUrl, duration = 5 } = req.body;
+
+    if (!imageUrl) {
+      return res.status(400).json({ error: "imageUrl is required" });
+    }
+
+    const unique = `${uuidv4()}-${Date.now()}`;
+    const inputPath = `/tmp/img-${unique}.jpg`;
+    const outputPath = `/tmp/out-${unique}.mp4`;
+
+    // 画像をダウンロード
+    await downloadToTmp(imageUrl, inputPath);
+
+    // ffmpeg で動画化
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(inputPath)
+        .inputOptions(["-loop 1"])
+        .outputOptions([
+          `-t ${duration}`,
+          "-vf scale=1080:1920",
+          "-r 30",
+          "-pix_fmt yuv420p",
+          "-c:v libx264",
+          "-preset ultrafast"
+        ])
+        .save(outputPath)
+        .on("end", resolve)
+        .on("error", reject);
+    });
+
+    const file = fs.readFileSync(outputPath);
+
+    // 後片付け
+    try { fs.unlinkSync(inputPath); } catch {}
+    try { fs.unlinkSync(outputPath); } catch {}
+
+    res.setHeader("Content-Type", "video/mp4");
+    res.send(file);
+
+  } catch (err) {
+    console.error("image-to-video ERROR:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 
 // ------------------------------
 // POST /final-render-url
