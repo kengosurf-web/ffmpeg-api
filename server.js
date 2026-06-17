@@ -285,7 +285,7 @@ app.post("/clip", async (req, res) => {
 // ------------------------------
 // JPEG/PNG → MP4 変換（2段階 ffmpeg）
 // ① 画像 → 5秒動画化
-// ② ぼかし背景＋中央配置（complexFilter版）
+// ② ぼかし背景＋中央配置（Koyeb 互換版）
 // ------------------------------
 app.post("/image-to-video", async (req, res) => {
   try {
@@ -323,7 +323,7 @@ app.post("/image-to-video", async (req, res) => {
     });
 
     // ------------------------------
-    // ② ぼかし背景＋中央配置（complexFilter 正式版）
+    // ② ぼかし背景＋中央配置（Koyeb 互換 complexFilter）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -358,8 +358,8 @@ app.post("/image-to-video", async (req, res) => {
           {
             filter: "overlay",
             options: {
-              x: "(W-w)/2",
-              y: "(H-h)/2"
+              x: "(main_w-overlay_w)/2",
+              y: "(main_h-overlay_h)/2"
             },
             inputs: ["bg", "fg"]
           }
@@ -389,6 +389,7 @@ app.post("/image-to-video", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 
 
