@@ -283,8 +283,7 @@ app.post("/clip", async (req, res) => {
 
 // ------------------------------
 // JPEG/PNG → MP4（縦動画）
-// 背景生成なし（デフォルト黒）
-// 前景：長辺基準で縮小して中央配置
+// filter_complex を使わない中央配置
 // ------------------------------
 app.post("/image-to-video", async (req, res) => {
   try {
@@ -296,12 +295,11 @@ app.post("/image-to-video", async (req, res) => {
 
     const unique = `${uuidv4()}-${Date.now()}`;
     const inputPath = `/tmp/img-${unique}.jpg`;
-    const tempVideo = `/tmp/tmp-${unique}.mp4`;
     const outputPath = `/tmp/out-${unique}.mp4`;
 
     await downloadToTmp(imageUrl, inputPath);
 
-    // ① 画像 → 動画化
+    // filter_complex を使わずに scale + pad で縦動画化
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(inputPath)
@@ -311,43 +309,11 @@ app.post("/image-to-video", async (req, res) => {
           "-r 30",
           "-pix_fmt yuv420p",
           "-c:v libx264",
-          "-preset ultrafast"
-        ])
-        .save(tempVideo)
-        .on("end", resolve)
-        .on("error", reject);
-    });
+          "-preset ultrafast",
 
-    // ② 背景生成なし・前景だけ中央配置
-    await new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(tempVideo)
-        .complexFilter([
-          // 前景：長辺基準で縮小（縦1920に合わせる）
-          {
-            filter: "scale",
-            options: {
-              w: -1,
-              h: 1920,
-              force_original_aspect_ratio: "decrease"
-            },
-            inputs: "0:v",
-            outputs: "fg"
-          },
-          // 中央配置（背景は ffmpeg が自動で黒 or 白）
-          {
-            filter: "overlay",
-            options: {
-              x: "(main_w-overlay_w)/2",
-              y: "(main_h-overlay_h)/2"
-            },
-            inputs: ["0:v", "fg"]
-          }
-        ])
-        .outputOptions([
-          "-pix_fmt yuv420p",
-          "-c:v libx264",
-          "-preset ultrafast"
+          // ★ filter_complex を使わない中央配置
+          "-vf",
+          "scale=1080:-1:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
         ])
         .save(outputPath)
         .on("end", resolve)
@@ -357,7 +323,6 @@ app.post("/image-to-video", async (req, res) => {
     const file = fs.readFileSync(outputPath);
 
     try { fs.unlinkSync(inputPath); } catch {}
-    try { fs.unlinkSync(tempVideo); } catch {}
     try { fs.unlinkSync(outputPath); } catch {}
 
     res.setHeader("Content-Type", "video/mp4");
