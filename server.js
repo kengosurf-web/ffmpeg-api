@@ -281,19 +281,11 @@ app.post("/clip", async (req, res) => {
 
 
 
-
 // ------------------------------
 // JPEG/PNG → MP4 変換（2段階 ffmpeg）
 // ① 画像 → 5秒動画化
-// ② ぼかし背景＋中央配置（Koyeb 互換版）
+// ② ぼかしなし・中央配置のみ（最小構成）
 // ------------------------------
-console.log("=== FFMPEG FILTER LIST START ===");
-ffmpeg()
-  .addOption("-filters")
-  .on("stderr", console.log)
-  .on("end", () => console.log("=== FFMPEG FILTER LIST END ==="))
-  .run();
-
 app.post("/image-to-video", async (req, res) => {
   try {
     const { imageUrl, duration = 5 } = req.body;
@@ -330,28 +322,22 @@ app.post("/image-to-video", async (req, res) => {
     });
 
     // ------------------------------
-    // ② ぼかし背景＋中央配置（Koyeb 互換 complexFilter）
+    // ② ぼかしなし・中央配置のみ
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(tempVideo)
         .complexFilter([
+          // 背景：黒背景を 1080x1920 で生成
           {
-            filter: "scale",
+            filter: "color",
             options: {
-              w: 1080,
-              h: 1920,
-              force_original_aspect_ratio: "cover"
+              color: "black",
+              size: "1080x1920"
             },
-            inputs: "0:v",
             outputs: "bg"
           },
-          {
-            filter: "boxblur",
-            options: "20:20",
-            inputs: "bg",
-            outputs: "bg"
-          },
+          // 前景：画像を短辺基準で縮小
           {
             filter: "scale",
             options: {
@@ -362,6 +348,7 @@ app.post("/image-to-video", async (req, res) => {
             inputs: "0:v",
             outputs: "fg"
           },
+          // 中央配置（Koyeb 互換式）
           {
             filter: "overlay",
             options: {
