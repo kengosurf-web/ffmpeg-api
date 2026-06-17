@@ -323,7 +323,7 @@ app.post("/image-to-video", async (req, res) => {
     });
 
     // ------------------------------
-    // ② ぼかし背景＋中央配置（既存の万能フィルタ）
+    // ② ぼかし背景＋中央配置（filter_complex 正常版）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
@@ -333,9 +333,9 @@ app.post("/image-to-video", async (req, res) => {
           "-c:v libx264",
           "-preset ultrafast",
           "-filter_complex",
-          "\"[0:v]scale=1080:1920:force_original_aspect_ratio=cover,boxblur=20:20[bg]; \
-            [0:v]scale=1080:-1:force_original_aspect_ratio=decrease[fg]; \
-            [bg][fg]overlay=(W-w)/2:(H-h)/2\""
+          "[0:v]scale=1080:1920:force_original_aspect_ratio=cover,boxblur=20:20[bg]; \
+           [0:v]scale=1080:-1:force_original_aspect_ratio=decrease[fg]; \
+           [bg][fg]overlay=(W-w)/2:(H-h)/2"
         ])
         .save(outputPath)
         .on("end", resolve)
@@ -357,6 +357,7 @@ app.post("/image-to-video", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 
 
