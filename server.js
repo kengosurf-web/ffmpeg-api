@@ -285,7 +285,7 @@ app.post("/clip", async (req, res) => {
 // ------------------------------
 // JPEG/PNG → MP4 変換（2段階 ffmpeg）
 // ① 画像 → 5秒動画化
-// ② ぼかし背景＋中央配置のプロ仕様
+// ② ぼかし背景＋中央配置（complexFilter版）
 // ------------------------------
 app.post("/image-to-video", async (req, res) => {
   try {
@@ -323,19 +323,51 @@ app.post("/image-to-video", async (req, res) => {
     });
 
     // ------------------------------
-    // ② ぼかし背景＋中央配置（filter_complex 正常版）
+    // ② ぼかし背景＋中央配置（complexFilter 正式版）
     // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(tempVideo)
+        .complexFilter([
+          {
+            filter: "scale",
+            options: {
+              w: 1080,
+              h: 1920,
+              force_original_aspect_ratio: "cover"
+            },
+            inputs: "0:v",
+            outputs: "bg"
+          },
+          {
+            filter: "boxblur",
+            options: "20:20",
+            inputs: "bg",
+            outputs: "bg"
+          },
+          {
+            filter: "scale",
+            options: {
+              w: 1080,
+              h: -1,
+              force_original_aspect_ratio: "decrease"
+            },
+            inputs: "0:v",
+            outputs: "fg"
+          },
+          {
+            filter: "overlay",
+            options: {
+              x: "(W-w)/2",
+              y: "(H-h)/2"
+            },
+            inputs: ["bg", "fg"]
+          }
+        ])
         .outputOptions([
           "-pix_fmt yuv420p",
           "-c:v libx264",
-          "-preset ultrafast",
-          "-filter_complex",
-          "[0:v]scale=1080:1920:force_original_aspect_ratio=cover,boxblur=20:20[bg]; \
-           [0:v]scale=1080:-1:force_original_aspect_ratio=decrease[fg]; \
-           [bg][fg]overlay=(W-w)/2:(H-h)/2"
+          "-preset ultrafast"
         ])
         .save(outputPath)
         .on("end", resolve)
