@@ -287,6 +287,13 @@ app.post("/clip", async (req, res) => {
 // ① 画像 → 5秒動画化
 // ② ぼかし背景＋中央配置（Koyeb 互換版）
 // ------------------------------
+console.log("=== FFMPEG FILTER LIST START ===");
+ffmpeg()
+  .addOption("-filters")
+  .on("stderr", console.log)
+  .on("end", () => console.log("=== FFMPEG FILTER LIST END ==="))
+  .run();
+
 app.post("/image-to-video", async (req, res) => {
   try {
     const { imageUrl, duration = 5 } = req.body;
