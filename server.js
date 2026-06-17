@@ -281,7 +281,8 @@ app.post("/clip", async (req, res) => {
 
 
 // ------------------------------
-// JPEG → MP4 変換（画像を動画化するだけの軽量API）
+// JPEG → MP4 変換（正方形/横長/縦長すべて対応）
+// ぼかし背景＋中央配置のプロ仕様
 // ------------------------------
 app.post("/image-to-video", async (req, res) => {
   try {
@@ -298,18 +299,23 @@ app.post("/image-to-video", async (req, res) => {
     // 画像をダウンロード
     await downloadToTmp(imageUrl, inputPath);
 
-    // ffmpeg で動画化
+    // ffmpeg で動画化（万能ぼかし背景方式）
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(inputPath)
         .inputOptions(["-loop 1"])
         .outputOptions([
           `-t ${duration}`,
-          "-vf scale=1080:1920",
           "-r 30",
           "-pix_fmt yuv420p",
           "-c:v libx264",
-          "-preset ultrafast"
+          "-preset ultrafast",
+          "-filter_complex",
+          // 背景：拡大＋ぼかし（9:16）
+          // 前景：短辺基準で縮小して中央配置
+          "\"[0:v]scale=1080:1920:force_original_aspect_ratio=cover,boxblur=20:20[bg]; \
+            [0:v]scale=1080:-1:force_original_aspect_ratio=decrease[fg]; \
+            [bg][fg]overlay=(W-w)/2:(H-h)/2\""
         ])
         .save(outputPath)
         .on("end", resolve)
@@ -330,7 +336,6 @@ app.post("/image-to-video", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 
 
 // ------------------------------
