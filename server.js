@@ -280,9 +280,12 @@ app.post("/clip", async (req, res) => {
 });
 
 
+
+
 // ------------------------------
-// JPEG → MP4 変換（正方形/横長/縦長すべて対応）
-// ぼかし背景＋中央配置のプロ仕様
+// JPEG/PNG → MP4 変換（2段階 ffmpeg）
+// ① 画像 → 5秒動画化
+// ② ぼかし背景＋中央配置のプロ仕様
 // ------------------------------
 app.post("/image-to-video", async (req, res) => {
   try {
@@ -294,12 +297,15 @@ app.post("/image-to-video", async (req, res) => {
 
     const unique = `${uuidv4()}-${Date.now()}`;
     const inputPath = `/tmp/img-${unique}.jpg`;
+    const tempVideo = `/tmp/tmp-${unique}.mp4`;
     const outputPath = `/tmp/out-${unique}.mp4`;
 
     // 画像をダウンロード
     await downloadToTmp(imageUrl, inputPath);
 
-    // ffmpeg で動画化（万能ぼかし背景方式）
+    // ------------------------------
+    // ① 画像 → 動画化（5秒・30fps）
+    // ------------------------------
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(inputPath)
@@ -309,10 +315,24 @@ app.post("/image-to-video", async (req, res) => {
           "-r 30",
           "-pix_fmt yuv420p",
           "-c:v libx264",
+          "-preset ultrafast"
+        ])
+        .save(tempVideo)
+        .on("end", resolve)
+        .on("error", reject);
+    });
+
+    // ------------------------------
+    // ② ぼかし背景＋中央配置（既存の万能フィルタ）
+    // ------------------------------
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(tempVideo)
+        .outputOptions([
+          "-pix_fmt yuv420p",
+          "-c:v libx264",
           "-preset ultrafast",
           "-filter_complex",
-          // 背景：拡大＋ぼかし（9:16）
-          // 前景：短辺基準で縮小して中央配置
           "\"[0:v]scale=1080:1920:force_original_aspect_ratio=cover,boxblur=20:20[bg]; \
             [0:v]scale=1080:-1:force_original_aspect_ratio=decrease[fg]; \
             [bg][fg]overlay=(W-w)/2:(H-h)/2\""
@@ -326,6 +346,7 @@ app.post("/image-to-video", async (req, res) => {
 
     // 後片付け
     try { fs.unlinkSync(inputPath); } catch {}
+    try { fs.unlinkSync(tempVideo); } catch {}
     try { fs.unlinkSync(outputPath); } catch {}
 
     res.setHeader("Content-Type", "video/mp4");
@@ -336,6 +357,8 @@ app.post("/image-to-video", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+
 
 
 // ------------------------------
