@@ -606,11 +606,14 @@ async function processBgmMixJob(jobId, finalVideoUrl, bgmUrl) {
     jobs[jobId].currentStep = "downloading video & bgm";
     jobs[jobId].progress = 20;
 
-    // 動画は安定しているので通常ダウンロード
-    await downloadToTmp(finalVideoUrl, videoPath);
+// 動画は安定しているので通常ダウンロード
+// await downloadToTmp(finalVideoUrl, videoPath);
 
-    // BGM は Jamendo CDN の遅延対策として retry 付き
-    await downloadWithRetry(bgmUrl, bgmPath);
+// 修正：動画も retry 付きにする
+await downloadWithRetry(finalVideoUrl, videoPath);
+
+// BGM は Jamendo CDN の遅延対策として retry 付き
+await downloadWithRetry(bgmUrl, bgmPath);
 
     // 40%
     jobs[jobId].currentStep = "probing video duration";
